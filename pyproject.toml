@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools==75.6.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plumb"
+version = "0.1.0"
+description = "Plumb: local-first BI build QC and confidence engine for Snowflake plus Tableau teams"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlglot==26.3.8",
+    "sqlfluff==3.3.1",
+    "snowflake-connector-python==3.13.2",
+    "pydantic==2.10.6",
+    "PyYAML==6.0.2",
+    "typer==0.15.1",
+    "rich==13.9.4",
+    "jinja2==3.1.5",
+    "pyarrow==18.1.0",
+    "keyring==25.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-cov==6.0.0",
+    "ruff==0.8.6",
+    "mypy==1.14.1",
+    "python-dotenv==1.0.1",
+    "types-PyYAML==6.0.12.20240917",
+]
+
+[project.scripts]
+plumb = "plumb.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["plumb*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E722 enforces the no-bare-except invariant. T201 enforces no print for user output.
+select = ["E", "F", "W", "I", "B", "T20"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
