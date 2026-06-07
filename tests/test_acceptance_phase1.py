@@ -166,7 +166,7 @@ def test_ac7_malformed_ruleset_exits_nonzero_with_message(tmp_path: Path):
         app, ["check", "sql", "--inline", "SELECT 1", "--rules", str(bad), "--static-only"]
     )
     assert result.exit_code == 3
-    assert "statement_timeout_s" in (result.stdout + (result.stderr or ""))
+    assert "statement_timeout_s" in result.output
 
 
 def test_ac8_refuses_any_non_read():

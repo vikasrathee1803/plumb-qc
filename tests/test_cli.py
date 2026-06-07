@@ -22,6 +22,22 @@ def test_version():
     assert "plumb" in result.stdout
 
 
+def test_help_renders_for_every_command():
+    """The rich help renderer must not crash. Regression for the Click 8.2
+    make_metavar break that CliRunner command invocations did not catch."""
+    for args in (
+        ["--help"],
+        ["check", "--help"],
+        ["rules", "--help"],
+        ["baseline", "--help"],
+        ["report", "--help"],
+        ["init", "--help"],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, f"{args} failed: {result.output}"
+        assert "Usage:" in result.output
+
+
 def test_static_only_cartesian_join_is_blocked_exit_2(tmp_path: Path):
     out = tmp_path / "report"
     result = runner.invoke(
@@ -65,7 +81,7 @@ def test_malformed_ruleset_exits_3_with_clear_message(tmp_path: Path):
         ["check", "sql", "--inline", "SELECT 1", "--rules", str(bad), "--static-only"],
     )
     assert result.exit_code == 3
-    assert "fail_on" in result.stdout or "fail_on" in (result.stderr or "")
+    assert "fail_on" in result.output
 
 
 def test_missing_sql_input_exits_3():

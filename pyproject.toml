@@ -15,6 +15,9 @@ dependencies = [
     "pydantic==2.10.6",
     "PyYAML==6.0.2",
     "typer==0.15.1",
+    # Typer 0.15.1 uses Click APIs that changed in Click 8.2 (make_metavar
+    # signature), which breaks the rich help renderer. Pin to the last 8.1.x.
+    "click==8.1.8",
     "rich==13.9.4",
     "jinja2==3.1.5",
     "pyarrow==18.1.0",
@@ -52,6 +55,8 @@ select = ["E", "F", "W", "I", "B", "T20"]
 [tool.ruff.lint.per-file-ignores]
 # B008 is the standard Typer idiom: Option/Argument calls in parameter defaults.
 "plumb/cli.py" = ["B008"]
+# Demo scripts are standalone tools where print to stdout is the intended output.
+"scripts/*.py" = ["T201", "E402"]
 
 [tool.mypy]
 python_version = "3.11"
