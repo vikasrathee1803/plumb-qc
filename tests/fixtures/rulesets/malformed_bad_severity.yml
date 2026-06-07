@@ -1,0 +1,5 @@
+version: "2026.06.0"
+severity_overrides:
+  S-STAT-001: SUPER_BAD
+checks:
+  - id: D-GRAIN-001

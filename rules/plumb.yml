@@ -1,0 +1,94 @@
+# Plumb default ruleset. Teams fork this into a central plumb-rules repo
+# and the local tool pins a version: plumb rules pin 2026.06.0
+version: "2026.06.0"
+
+defaults:
+  fail_on: "REVIEW"
+  max_result_rows: 100000
+  statement_timeout_s: 120
+  evidence_sample_rows: 20
+  redact_pii: true
+
+naming:
+  table_regex: "^(dim|fct|stg|rpt)_[a-z0-9_]+$"
+  tableau_field_regex: "^[A-Z][A-Za-z0-9 ]+$"
+
+deprecated_objects: []
+
+certified_sources: []
+
+severity_overrides: {}
+
+thresholds:
+  null_rate_default: 0.0
+  freshness_sla_hours_default: 24
+
+# Checks that need no target-specific params are enabled here by default.
+# Checks that assert against a declared key, SLA, or source of truth stay
+# disabled until a team or query spec supplies params; running them without
+# params would be a guess, and Plumb does not guess.
+checks:
+  - id: S-LINT-001
+    enabled: true
+  - id: S-STAT-001
+    enabled: true
+  - id: S-STAT-002
+    enabled: true
+  - id: S-STAT-003
+    enabled: true
+  - id: S-STAT-004
+    enabled: true
+  - id: S-STAT-005
+    enabled: true
+  - id: S-STAT-006
+    enabled: true
+  - id: S-STAT-007
+    enabled: true
+  - id: S-STAT-008
+    enabled: true
+  - id: S-STAT-010
+    enabled: true
+  - id: S-META-001
+    enabled: true
+  - id: S-META-002
+    enabled: true
+  - id: S-META-003
+    enabled: true
+  - id: S-META-004
+    enabled: true
+  - id: D-GRAIN-001
+    enabled: false
+    params: { key: [] }
+  - id: D-GRAIN-002
+    enabled: false
+  - id: D-NULL-001
+    enabled: false
+    params: { key: [] }
+  - id: D-NULL-002
+    enabled: false
+  - id: D-RI-001
+    enabled: false
+  - id: D-DOMAIN-001
+    enabled: false
+  - id: D-RANGE-001
+    enabled: false
+  - id: D-FRESH-001
+    enabled: false
+  - id: D-RECON-001
+    enabled: false
+  - id: D-DUP-001
+    enabled: true
+  - id: D-ADD-001
+    enabled: true
+  - id: R-DIFF-001
+    enabled: true
+  - id: R-AGG-001
+    enabled: true
+  - id: P-PROF-001
+    enabled: true
+  - id: P-COST-001
+    enabled: true
+  - id: P-SPILL-001
+    enabled: true
+  - id: P-CARD-001
+    enabled: true

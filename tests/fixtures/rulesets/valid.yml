@@ -1,0 +1,33 @@
+version: "2026.06.0"
+defaults:
+  fail_on: "REVIEW"
+  max_result_rows: 100000
+  statement_timeout_s: 120
+  evidence_sample_rows: 20
+  redact_pii: true
+naming:
+  table_regex: "^(dim|fct|stg|rpt)_[a-z0-9_]+$"
+  tableau_field_regex: "^[A-Z][A-Za-z0-9 ]+$"
+deprecated_objects:
+  - "ANALYTICS.LEGACY.V_OLD_SALES"
+certified_sources:
+  - "ANALYTICS.MART.FCT_SALES"
+severity_overrides:
+  S-STAT-001: HIGH
+thresholds:
+  null_rate_default: 0.0
+  freshness_sla_hours_default: 24
+checks:
+  - id: D-GRAIN-001
+    enabled: true
+    params: { key: ["order_id"] }
+  - id: D-RECON-001
+    enabled: true
+    params:
+      metric_sql: "SELECT SUM(amount) FROM {{ target }}"
+      source_of_truth_sql: "SELECT SUM(net_amount) FROM ANALYTICS.MART.FCT_SALES"
+      tolerance_abs: 0
+      tolerance_pct: 0.001
+  - id: D-FRESH-001
+    enabled: true
+    params: { event_ts_col: "created_at", sla_hours: 6 }

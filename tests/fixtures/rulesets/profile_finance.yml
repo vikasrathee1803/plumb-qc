@@ -1,0 +1,17 @@
+name: finance
+defaults:
+  fail_on: "READY_WITH_NOTES"
+  evidence_sample_rows: 0
+  aggregate_only: true
+severity_overrides:
+  D-NULL-002: HIGH
+thresholds:
+  null_rate_default: 0.001
+certified_sources:
+  - "ANALYTICS.MART.FCT_GL"
+checks:
+  - id: D-GRAIN-001
+    enabled: true
+    params: { key: ["journal_id", "line_id"] }
+  - id: D-FRESH-001
+    enabled: false

@@ -1,0 +1,3 @@
+version: "2026.06.0"
+defaultz:
+  fail_on: "REVIEW"

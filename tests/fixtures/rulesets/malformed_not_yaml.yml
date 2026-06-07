@@ -1,0 +1,4 @@
+version: "2026.06.0"
+checks: [
+  - id: broken
+    this is not valid yaml: [

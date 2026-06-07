@@ -1,0 +1,9 @@
+# Marketing profile: standard gate, tolerant of late-arriving event data.
+name: marketing
+
+defaults:
+  fail_on: "REVIEW"
+
+thresholds:
+  null_rate_default: 0.02
+  freshness_sla_hours_default: 48

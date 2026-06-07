@@ -1,0 +1,15 @@
+# Finance profile: strictest gate, no row samples leave the machine.
+name: finance
+
+defaults:
+  fail_on: "READY_WITH_NOTES"
+  evidence_sample_rows: 0
+  aggregate_only: true
+
+severity_overrides:
+  D-NULL-002: HIGH
+  S-META-004: HIGH
+
+thresholds:
+  null_rate_default: 0.0
+  freshness_sla_hours_default: 12
