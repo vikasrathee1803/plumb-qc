@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plumb report: {{ result.target.name }}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0; background: #f5f6f8; color: #1c1e21; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px; }
+  header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  .meta { color: #555; font-size: 13px; }
+  .verdict { font-size: 22px; font-weight: 700; padding: 10px 18px; border-radius: 8px; color: #fff; }
+  .v-BLOCKED { background: #b3261e; }
+  .v-REVIEW { background: #c77700; }
+  .v-READY_WITH_NOTES { background: #3367d6; }
+  .v-READY { background: #1e7e34; }
+  .card { background: #fff; border: 1px solid #e2e4e8; border-radius: 8px; padding: 16px; margin: 16px 0; }
+  .counts span { display: inline-block; margin-right: 14px; font-size: 14px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+  .s-FAIL { background: #fde8e6; color: #b3261e; }
+  .s-PASS { background: #e6f4ea; color: #1e7e34; }
+  .s-WARN { background: #fef3e0; color: #c77700; }
+  .s-SKIP { background: #eceff1; color: #555; }
+  .s-ERROR { background: #efe1fb; color: #6a1b9a; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { color: #555; font-weight: 600; }
+  .sev { font-size: 11px; color: #888; }
+  details { margin-top: 6px; }
+  summary { cursor: pointer; color: #3367d6; font-size: 12px; }
+  pre { background: #f0f1f3; padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
+  .gap { color: #b3261e; font-weight: 600; }
+  .ran { color: #1e7e34; }
+  footer { color: #888; font-size: 12px; text-align: center; padding: 16px; }
+  .evidence th { background: #fafbfc; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Plumb report: {{ result.target.name }}</h1>
+      <div class="meta">
+        {{ result.target.type }} | profile {{ result.profile or "none" }} |
+        ruleset {{ result.ruleset_version }} | {{ result.timestamp }}
+      </div>
+    </div>
+    <div class="verdict v-{{ result.verdict.value }}">{{ result.verdict.value }}</div>
+  </header>
+
+  <div class="card">
+    <strong>Coverage</strong>
+    <p class="ran">Ran: {{ result.coverage.families_run | map(attribute='value') | join(', ') or "none" }}</p>
+    {% if result.coverage.families_skipped %}
+    <p class="gap">Skipped, most important first:</p>
+    <ol>
+      {% for skip in result.coverage.families_skipped %}
+      <li><strong>{{ skip.family.value }}</strong>: {{ skip.reason }}</li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="ran">No families skipped.</p>
+    {% endif %}
+  </div>
+
+  <div class="card counts">
+    <strong>Summary</strong><br>
+    <span class="pill s-PASS">passed {{ result.summary.passed }}</span>
+    <span class="pill s-FAIL">blocker {{ result.summary.blocker }}</span>
+    <span class="pill s-FAIL">high {{ result.summary.high }}</span>
+    <span class="pill s-FAIL">medium {{ result.summary.medium }}</span>
+    <span class="pill s-FAIL">low {{ result.summary.low }}</span>
+    <span class="pill s-WARN">warned {{ result.summary.warned }}</span>
+    <span class="pill s-ERROR">errored {{ result.summary.errored }}</span>
+    <span class="pill s-SKIP">skipped {{ result.summary.skipped }}</span>
+    <span>total {{ result.summary.total }}</span>
+  </div>
+
+  <div class="card">
+    <strong>Checks</strong>
+    <table>
+      <thead><tr><th>Check</th><th>Status</th><th>Observed</th><th>Detail</th></tr></thead>
+      <tbody>
+      {% for check in result.checks %}
+        <tr>
+          <td>
+            <strong>{{ check.id }}</strong><br>
+            {{ check.name }}<br>
+            <span class="sev">{{ check.family.value }} | {{ check.severity.value }}</span>
+          </td>
+          <td><span class="pill s-{{ check.status.value }}">{{ check.status.value }}</span></td>
+          <td>
+            {{ check.observed or "" }}
+            {% if check.expected %}<br><span class="sev">expected: {{ check.expected }}</span>{% endif %}
+          </td>
+          <td>
+            {% if check.remediation %}{{ check.remediation }}{% endif %}
+            {% if check.ai_explanation %}<details><summary>AI explanation</summary>{{ check.ai_explanation }}</details>{% endif %}
+            {% if check.evidence.sample_rows %}
+            <details>
+              <summary>{{ check.evidence.sample_rows | length }} evidence row(s)</summary>
+              <table class="evidence">
+                <thead><tr>{% for col in check.evidence.sample_rows[0].keys() %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+                <tbody>
+                {% for row in check.evidence.sample_rows %}
+                  <tr>{% for value in row.values() %}<td>{{ value }}</td>{% endfor %}</tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </details>
+            {% endif %}
+            {% if check.evidence.query %}
+            <details><summary>query</summary><pre>{{ check.evidence.query }}</pre></details>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    Plumb {{ plumb_version }} | run {{ result.run_id }} |
+    warehouse {{ result.environment.warehouse or "n/a" }} |
+    role {{ result.environment.role or "n/a" }} |
+    deterministic verdict, no AI in the verdict path
+  </footer>
+</div>
+</body>
+</html>
