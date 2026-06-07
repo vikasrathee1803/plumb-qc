@@ -55,8 +55,9 @@ and report as the CLI. Run a SQL check or upload a .twb/.twbx.
 
 `plumb check sql --query f.sql --explain` attaches plain-English
 explanations to failing checks. It runs only after the verdict is decided
-and never changes a status. Needs ANTHROPIC_API_KEY (env or OS keychain);
-without it, the run is unaffected.
+and never changes a status. Groq-first (set GROQ_API_KEY; default model
+llama-3.3-70b-versatile), with xAI, Gemini, and Anthropic fallbacks. Key
+from env or OS keychain; without one, the run is unaffected.
 
 ## Shared baselines (Phase 2)
 

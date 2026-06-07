@@ -360,8 +360,8 @@ def _attach_ai_explanations(result: RunResult, sql_text: str | None) -> None:
     client = get_client()
     if client is None:
         err_console.print(
-            "[yellow]note:[/yellow] --explain set but no Anthropic API key found; "
-            "skipping explanations. The verdict is unaffected."
+            "[yellow]note:[/yellow] --explain set but no LLM API key found "
+            "(set GROQ_API_KEY); skipping explanations. The verdict is unaffected."
         )
         return
     verdict_before = result.verdict

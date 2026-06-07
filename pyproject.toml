@@ -26,7 +26,8 @@ dependencies = [
     "fastapi==0.115.6",
     "uvicorn==0.34.0",
     "python-multipart==0.0.20",
-    "anthropic==0.42.0",
+    "openai==1.59.6",
+    "google-generativeai==0.8.3",
     "httpx==0.28.1",
     "tableauserverclient==0.36",
 ]
@@ -81,7 +82,10 @@ no_implicit_optional = true
 # strict; see ADR-0010. The checks themselves are covered by fixture tests.
 # Third-party packages without bundled type stubs.
 [[tool.mypy.overrides]]
-module = ["pyarrow.*", "snowflake.*", "sqlfluff.*", "keyring.*", "lxml.*"]
+module = [
+    "pyarrow.*", "snowflake.*", "sqlfluff.*", "keyring.*", "lxml.*",
+    "openai.*", "google.*", "anthropic.*", "tableauserverclient.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
