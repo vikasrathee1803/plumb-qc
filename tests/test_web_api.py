@@ -26,6 +26,45 @@ def test_profiles_lists_shipped_profiles():
     assert "marketing" in body["profiles"]
 
 
+def test_rulesets_lists_check_sets():
+    r = client.get("/api/rulesets")
+    assert r.status_code == 200
+    body = r.json()
+    assert "plumb" in body["rulesets"]
+    assert "customer_ltv" in body["rulesets"]
+
+
+def test_connection_endpoint_reports_configuration():
+    r = client.get("/api/connection")
+    assert r.status_code == 200
+    # Either configured (a profile exists) or not; never an error.
+    assert "configured" in r.json()
+
+
+def test_unknown_ruleset_is_400():
+    r = client.post(
+        "/api/check/sql",
+        json={"sql": "SELECT 1", "static_only": True, "rules": "no_such_set"},
+    )
+    assert r.status_code == 400
+
+
+def test_customer_ltv_check_set_enables_data_assertions():
+    """The customer_ltv check set enables grain/recon, so a static-only run
+    against it skips the execution checks but still loads the richer set."""
+    r = client.post(
+        "/api/check/sql",
+        json={
+            "sql": "SELECT customer_id FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV",
+            "static_only": True,
+            "rules": "customer_ltv",
+        },
+    )
+    assert r.status_code == 200
+    ids = [c["id"] for c in r.json()["checks"]]
+    assert "D-GRAIN-001" in ids and "D-RECON-001" in ids
+
+
 def test_sql_static_only_cartesian_join_is_blocked():
     r = client.post(
         "/api/check/sql",

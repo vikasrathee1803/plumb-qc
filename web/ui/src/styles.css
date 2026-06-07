@@ -8,6 +8,9 @@ body { margin: 0; background: #f5f6f8; color: #1c1e21; }
 header { display: flex; align-items: baseline; gap: 12px; }
 h1 { font-size: 22px; margin: 0; }
 .sub { color: #666; font-size: 13px; }
+.conn { margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 12px; font-weight: 600; }
+.conn.live { background: #e6f4ea; color: #1e7e34; }
+.conn.off { background: #eceff1; color: #777; }
 .tabs { margin: 16px 0; display: flex; gap: 8px; }
 .tabs button {
   border: 1px solid #d0d3d8; background: #fff; padding: 6px 16px; border-radius: 6px;

@@ -53,13 +53,23 @@ _REPORTS: dict[str, RunResult] = {}
 class SqlCheckRequest(BaseModel):
     sql: str
     profile: str | None = None
+    rules: str | None = None
     static_only: bool = True
     baseline: str | None = None
     explain: bool = False
 
 
-def _resolve_ruleset(profile: str | None) -> Ruleset:
-    ruleset = load_ruleset(DEFAULT_RULES, enforce_pin=False)
+def _ruleset_path(name: str | None) -> Path:
+    if not name or name == "plumb":
+        return DEFAULT_RULES
+    candidate = REPO_ROOT / "rules" / f"{name}.yml"
+    if not candidate.exists():
+        raise HTTPException(status_code=400, detail=f"unknown check set: {name}")
+    return candidate
+
+
+def _resolve_ruleset(profile: str | None, rules: str | None = None) -> Ruleset:
+    ruleset = load_ruleset(_ruleset_path(rules), enforce_pin=False)
     if profile:
         profile_path = PROFILES_DIR / f"{profile}.yml"
         if not profile_path.exists():
@@ -106,11 +116,33 @@ def create_app() -> FastAPI:
         names = sorted(p.stem for p in PROFILES_DIR.glob("*.yml")) if PROFILES_DIR.exists() else []
         return {"ruleset_version": ruleset.version, "profiles": names}
 
+    @app.get("/api/rulesets")
+    def rulesets() -> dict[str, Any]:
+        rules_dir = REPO_ROOT / "rules"
+        names = sorted(p.stem for p in rules_dir.glob("*.yml")) if rules_dir.exists() else []
+        return {"default": "plumb", "rulesets": names}
+
+    @app.get("/api/connection")
+    def connection() -> dict[str, Any]:
+        """Report whether a live Snowflake connection is configured, so the
+        UI can default to a live run. Does not connect (kept fast)."""
+        try:
+            profile = load_connection_profile()
+        except ConfigError:
+            return {"configured": False}
+        return {
+            "configured": True,
+            "account": profile.account,
+            "warehouse": profile.warehouse,
+            "role": profile.role,
+            "user": profile.user,
+        }
+
     @app.post("/api/check/sql")
     def check_sql(req: SqlCheckRequest) -> dict[str, Any]:
         if not req.sql.strip():
             raise HTTPException(status_code=400, detail="sql is required")
-        ruleset = _resolve_ruleset(req.profile)
+        ruleset = _resolve_ruleset(req.profile, req.rules)
         run_id = str(uuid.uuid4())
         session = None
         if not req.static_only:
