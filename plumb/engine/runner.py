@@ -17,6 +17,7 @@ import plumb.checks  # noqa: F401 - populates the registry on import
 from plumb.baseline.store import BaselineStore
 from plumb.config.models import Ruleset
 from plumb.engine.models import (
+    CheckFamily,
     CheckResult,
     Environment,
     RunResult,
@@ -31,6 +32,21 @@ from plumb.engine.registry import (
 )
 from plumb.engine.verdict import compute_coverage, compute_summary, compute_verdict
 
+# Which check families apply to each target type. The runner only runs
+# checks whose family is applicable, so a SQL target never emits Tableau
+# results and a Tableau target never emits SQL results. This keeps coverage
+# honest: it reports only families relevant to what was actually checked.
+_FAMILIES_FOR_TARGET: dict[str, set[CheckFamily]] = {
+    "sql": {
+        CheckFamily.STATIC,
+        CheckFamily.METADATA,
+        CheckFamily.ASSERTIONS,
+        CheckFamily.REGRESSION,
+        CheckFamily.PERFORMANCE,
+    },
+    "tableau": {CheckFamily.TABLEAU_STATIC, CheckFamily.TABLEAU_LIVE},
+}
+
 
 @dataclass
 class RunRequest:
@@ -41,6 +57,7 @@ class RunRequest:
     session: Any | None = None
     baseline_store: BaselineStore | None = None
     baseline_name: str | None = None
+    workbook: Any | None = None
     run_id: str | None = None
 
 
@@ -55,9 +72,11 @@ def run_checks(request: RunRequest) -> RunResult:
         session=request.session,
         ruleset=ruleset,
         baseline_store=request.baseline_store,
+        workbook=request.workbook,
         extras={"baseline_name": request.baseline_name},
     )
 
+    applicable = _FAMILIES_FOR_TARGET.get(request.target.type, set())
     results: list[CheckResult] = []
     for spec in ruleset.checks:
         if not spec.enabled:
@@ -65,9 +84,13 @@ def run_checks(request: RunRequest) -> RunResult:
         try:
             definition = get_check(spec.id)
         except UnknownCheckError:
-            # A ruleset can reference a check id not present in this build
-            # (for example a Phase 2 Tableau check). Skip it visibly rather
-            # than crash; coverage and the registry are the source of truth.
+            # A ruleset can reference a check id not present in this build.
+            # Skip it visibly rather than crash; the registry is the source
+            # of truth for what this build can run.
+            continue
+        if definition.family not in applicable:
+            # Not relevant to this target type (for example a SQL check on a
+            # Tableau target). Do not emit a result; coverage stays focused.
             continue
         outcome = definition.fn(ctx, spec.params)
         if isinstance(outcome, list):

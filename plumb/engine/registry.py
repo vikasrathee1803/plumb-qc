@@ -36,6 +36,7 @@ class CheckContext:
     session: Any | None = None
     ruleset: Any | None = None
     baseline_store: Any | None = None
+    workbook: Any | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 

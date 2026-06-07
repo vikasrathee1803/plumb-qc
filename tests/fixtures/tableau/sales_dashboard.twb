@@ -1,0 +1,78 @@
+<?xml version='1.0' encoding='utf-8' ?>
+<workbook source-build='2023.1.0' version='18.1'>
+  <datasources>
+    <datasource caption='Parameters' name='Parameters' hasconnection='false' inline='true'>
+      <column caption='Target' datatype='real' name='[Parameter 1]' role='measure' type='quantitative' value='1000' />
+    </datasource>
+
+    <datasource caption='Sales Mart Certified' name='federated.sales' inline='true'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='snowflake' name='sqlproxy.sales'>
+            <connection class='sqlproxy' />
+          </named-connection>
+        </named-connections>
+        <relation connection='sqlproxy.sales' name='FCT_SALES' table='[ANALYTICS].[FCT_SALES]' type='table' />
+      </connection>
+      <repository-location id='SalesMartCertified' path='/t/datasources' revision='1.0' />
+      <column caption='Order Id' datatype='integer' name='[order_id]' role='dimension' type='ordinal' />
+      <column caption='Region' datatype='string' name='[Region]' role='dimension' type='nominal' />
+      <column caption='Total Sales' datatype='real' name='[Total Sales]' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='SUM([Amount])' />
+      </column>
+      <column caption='Profit Ratio' datatype='real' name='[Profit Ratio]' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='AVG([Profit] / [Amount])' />
+      </column>
+      <column caption='Sales per Customer' datatype='real' name='[Sales per Customer]' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='{ FIXED [Customer Id] : SUM([Amount]) }' />
+      </column>
+      <column caption='High Value Flag' datatype='integer' name='[High Value Flag]' role='dimension' type='ordinal'>
+        <calculation class='tableau' formula='IF [Amount] &gt; 1000 THEN 1 ELSE 0 END' />
+      </column>
+      <column caption='Is My Region' datatype='boolean' name='[Is My Region]' role='dimension' type='nominal'>
+        <calculation class='tableau' formula='[Region] = USERNAME()' />
+      </column>
+      <column caption='untidy ratio' datatype='real' name='[untidy ratio]' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='[Total Sales] / 100' />
+      </column>
+    </datasource>
+
+    <datasource caption='Raw Orders Extract' name='federated.raw' inline='true'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='snowflake' name='snowflake.raw'>
+            <connection class='snowflake' dbname='RAW' schema='PUBLIC' />
+          </named-connection>
+        </named-connections>
+        <relation connection='snowflake.raw' name='Custom SQL Query' type='text'>SELECT o.*, c.name FROM raw.orders o JOIN raw.customers c ON o.cust_id = c.id</relation>
+      </connection>
+      <extract count='-1' enabled='true'>
+        <connection class='dataengine' dbname='Data/Extracts/raw.hyper' />
+      </extract>
+      <column caption='Raw Amount' datatype='real' name='[raw_amount]' role='measure' type='quantitative' />
+      <column caption='Stale Threshold' datatype='real' name='[Stale Threshold]' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='[raw_amount] * 1.15' />
+      </column>
+    </datasource>
+  </datasources>
+
+  <worksheets>
+    <worksheet name='Sales Overview'>
+      <table>
+        <view>
+          <datasources>
+            <datasource caption='Sales Mart Certified' name='federated.sales' />
+          </datasources>
+          <datasource-dependencies datasource='federated.sales'>
+            <column caption='Total Sales' datatype='real' name='[Total Sales]' role='measure' type='quantitative' />
+            <column caption='Order Id' datatype='integer' name='[order_id]' role='dimension' type='ordinal' />
+            <column caption='Region' datatype='string' name='[Region]' role='dimension' type='nominal' />
+          </datasource-dependencies>
+          <filter class='categorical' column='[federated.sales].[Region]' />
+          <filter class='quantitative' column='[federated.sales].[Total Sales]' />
+        </view>
+        <totals show-grand-totals='true' />
+      </table>
+    </worksheet>
+  </worksheets>
+</workbook>

@@ -108,9 +108,11 @@ def test_html_is_self_contained_and_names_the_evidence():
 
 def test_no_em_dash_in_any_report():
     result = _result()
+    em_dash = chr(0x2014)  # the character this whole project forbids
+    en_dash = chr(0x2013)
     for rendered in (render_json(result), render_junit(result), render_html(result)):
-        assert "—" not in rendered
-        assert "–" not in rendered
+        assert em_dash not in rendered
+        assert en_dash not in rendered
 
 
 def test_html_escapes_evidence_values():

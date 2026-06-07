@@ -22,6 +22,7 @@ dependencies = [
     "jinja2==3.1.5",
     "pyarrow==18.1.0",
     "keyring==25.6.0",
+    "lxml==5.3.0",
 ]
 
 [project.optional-dependencies]
@@ -72,7 +73,7 @@ no_implicit_optional = true
 # strict; see ADR-0010. The checks themselves are covered by fixture tests.
 # Third-party packages without bundled type stubs.
 [[tool.mypy.overrides]]
-module = ["pyarrow.*", "snowflake.*", "sqlfluff.*", "keyring.*"]
+module = ["pyarrow.*", "snowflake.*", "sqlfluff.*", "keyring.*", "lxml.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -82,6 +83,7 @@ module = [
     "plumb.checks.sql_assertions",
     "plumb.checks.sql_regression",
     "plumb.checks.sql_performance",
+    "plumb.checks.tableau_static",
 ]
 disallow_untyped_defs = false
 disable_error_code = ["union-attr", "arg-type"]

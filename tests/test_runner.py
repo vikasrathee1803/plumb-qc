@@ -103,6 +103,48 @@ def test_unknown_check_id_in_ruleset_is_skipped_not_fatal():
     assert all(c.id != "T-SRC-001" for c in result.checks)
 
 
+def test_tableau_target_runs_only_tableau_checks():
+    from pathlib import Path
+
+    from plumb.checks._tableau import parse_workbook
+
+    wb = parse_workbook(
+        Path(__file__).parent / "fixtures" / "tableau" / "sales_dashboard.twb"
+    )
+    ruleset = Ruleset(
+        version="1",
+        checks=[
+            CheckSpec(id="S-STAT-001", enabled=True),  # SQL: must not run on tableau
+            CheckSpec(id="T-SRC-003", enabled=True),  # tableau: must run
+        ],
+    )
+    result = run_checks(
+        RunRequest(
+            target=Target(type="tableau", name="wb", source_ref="wb.twb"),
+            ruleset=ruleset,
+            workbook=wb,
+        )
+    )
+    families = {c.family for c in result.checks}
+    assert families == {CheckFamily.TABLEAU_STATIC}
+    assert any(c.id == "T-SRC-003" for c in result.checks)
+    assert all(c.id != "S-STAT-001" for c in result.checks)
+
+
+def test_sql_target_does_not_run_tableau_checks():
+    ruleset = Ruleset(
+        version="1",
+        checks=[
+            CheckSpec(id="S-STAT-001", enabled=True),
+            CheckSpec(id="T-SRC-003", enabled=True),  # tableau: must not run on sql
+        ],
+    )
+    result = run_checks(
+        RunRequest(target=_target(), ruleset=ruleset, sql_text=CLEAN_SQL)
+    )
+    assert all(c.family is not CheckFamily.TABLEAU_STATIC for c in result.checks)
+
+
 def test_environment_carries_query_tag_warehouse_role():
     ruleset = Ruleset(version="1", checks=[CheckSpec(id="S-STAT-001", enabled=True)])
     session = RouteSession()

@@ -12,4 +12,5 @@ from plumb.checks import (  # noqa: F401 - imported for registration side effect
     sql_performance,
     sql_regression,
     sql_static,
+    tableau_static,
 )

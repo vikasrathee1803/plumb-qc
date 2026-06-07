@@ -92,3 +92,29 @@ checks:
     enabled: true
   - id: P-CARD-001
     enabled: true
+  # Tableau static checks (Phase 2). Applied only to a Tableau target.
+  - id: T-SRC-001
+    enabled: true
+  - id: T-SRC-002
+    enabled: true
+  - id: T-SRC-003
+    enabled: true
+  - id: T-LOD-001
+    enabled: true
+  - id: T-CALC-001
+    enabled: true
+  - id: T-CALC-002
+    enabled: true
+  - id: T-NAME-001
+    enabled: true
+  - id: T-UNUSED-001
+    enabled: true
+  - id: T-FMT-001
+    enabled: true
+  - id: T-FILT-001
+    enabled: true
+  - id: T-RLS-001
+    enabled: false
+    params: { required: false }
+  - id: T-TOTAL-001
+    enabled: true

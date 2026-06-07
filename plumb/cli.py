@@ -18,6 +18,7 @@ from rich.table import Table
 from plumb import __version__
 from plumb.baseline.store import LocalParquetStore, make_baseline
 from plumb.checks._sql import SqlParseError, select_all_query
+from plumb.checks._tableau import TableauParseError, parse_workbook
 from plumb.config.loader import (
     CONNECTION_FILE,
     PLUMB_HOME,
@@ -193,9 +194,10 @@ def init() -> None:
 
 @app.command("check")
 def check(
-    kind: str = typer.Argument(..., help="What to check: 'sql'."),
+    kind: str = typer.Argument(..., help="What to check: 'sql' or 'tableau'."),
     query: Path = typer.Option(None, "--query", help="Path to a .sql file."),
     inline: str = typer.Option(None, "--inline", help="Inline SQL string."),
+    workbook: Path = typer.Option(None, "--workbook", help="Path to a .twb or .twbx."),
     profile: str = typer.Option(None, "--profile", help="Profile name to apply."),
     baseline: str = typer.Option(None, "--baseline", help="Baseline name for regression diff."),
     rules: Path = typer.Option(None, "--rules", help="Path to a ruleset file."),
@@ -207,31 +209,34 @@ def check(
         False, "--explain", help="Attach AI explanations to failures (Phase 2)."
     ),
 ) -> None:
-    """Run the SQL checks and write the HTML, JSON, and JUnit reports."""
-    if kind != "sql":
-        raise _fail(f"unsupported check kind {kind!r}; only 'sql' is supported in Phase 1")
+    """Run the checks and write the HTML, JSON, and JUnit reports."""
+    if kind not in ("sql", "tableau"):
+        raise _fail(f"unsupported check kind {kind!r}; use 'sql' or 'tableau'")
     if explain:
         err_console.print(
             "[yellow]note:[/yellow] --explain is a Phase 2 feature and does not "
             "alter any verdict; ignoring for now."
         )
 
-    sql_text, target = _load_target(query, inline)
     ruleset = _resolve_ruleset(rules, profile)
-
     session = None
-    if not static_only:
-        session = _open_session(ruleset)
+    request_kwargs: dict = {}
+
+    if kind == "tableau":
+        target, parsed = _load_workbook(workbook)
+        request_kwargs["workbook"] = parsed
+    else:
+        sql_text, target = _load_target(query, inline)
+        request_kwargs["sql_text"] = sql_text
+        request_kwargs["baseline_store"] = LocalParquetStore()
+        request_kwargs["baseline_name"] = baseline
+        if not static_only:
+            session = _open_session(ruleset)
+            request_kwargs["session"] = session
 
     try:
         request = RunRequest(
-            target=target,
-            ruleset=ruleset,
-            sql_text=sql_text,
-            profile=profile,
-            session=session,
-            baseline_store=LocalParquetStore(),
-            baseline_name=baseline,
+            target=target, ruleset=ruleset, profile=profile, **request_kwargs
         )
         result = run_checks(request)
     finally:
@@ -313,6 +318,19 @@ def _load_target(query: Path | None, inline: str | None) -> tuple[str, Target]:
     if inline:
         return inline, Target(type="sql", name="inline", source_ref=None)
     raise _fail("provide SQL with --query PATH or --inline 'SELECT ...'")
+
+
+def _load_workbook(workbook: Path | None) -> tuple[Target, object]:
+    if not workbook:
+        raise _fail("provide a workbook with --workbook PATH (.twb or .twbx)")
+    if not workbook.exists():
+        raise _fail(f"workbook not found: {workbook}")
+    try:
+        parsed = parse_workbook(workbook)
+    except TableauParseError as exc:
+        raise _fail(str(exc)) from exc
+    target = Target(type="tableau", name=workbook.stem, source_ref=str(workbook))
+    return target, parsed
 
 
 def _repo_rules_dir() -> Path | None:
