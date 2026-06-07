@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import shutil
+import uuid
 from pathlib import Path
 
 import typer
@@ -219,6 +220,9 @@ def check(
         )
 
     ruleset = _resolve_ruleset(rules, profile)
+    # Generate the run id up front so the session's QUERY_TAG carries the
+    # same run id the report reports (invariant: QUERY_TAG = plumb_qc:{run_id}).
+    run_id = str(uuid.uuid4())
     session = None
     request_kwargs: dict = {}
 
@@ -231,12 +235,12 @@ def check(
         request_kwargs["baseline_store"] = LocalParquetStore()
         request_kwargs["baseline_name"] = baseline
         if not static_only:
-            session = _open_session(ruleset)
+            session = _open_session(ruleset, run_id)
             request_kwargs["session"] = session
 
     try:
         request = RunRequest(
-            target=target, ruleset=ruleset, profile=profile, **request_kwargs
+            target=target, ruleset=ruleset, profile=profile, run_id=run_id, **request_kwargs
         )
         result = run_checks(request)
     finally:
@@ -375,7 +379,7 @@ def _resolve_ruleset(rules: Path | None, profile: str | None) -> Ruleset:
     return ruleset
 
 
-def _open_session(ruleset: Ruleset) -> SnowflakeSession:
+def _open_session(ruleset: Ruleset, run_id: str) -> SnowflakeSession:
     try:
         connection = load_connection_profile()
     except ConfigError as exc:
@@ -385,7 +389,7 @@ def _open_session(ruleset: Ruleset) -> SnowflakeSession:
         ) from exc
     session = SnowflakeSession(
         connection,
-        run_id="pending",
+        run_id=run_id,
         statement_timeout_s=ruleset.defaults.statement_timeout_s,
         max_result_rows=ruleset.defaults.max_result_rows,
     )
@@ -402,7 +406,7 @@ def _do_baseline(
         raise _fail(f"query file not found: {query}")
     sql_text = query.read_text(encoding="utf-8")
     ruleset = _resolve_ruleset(rules, profile)
-    session = _open_session(ruleset)
+    session = _open_session(ruleset, str(uuid.uuid4()))
     try:
         capped = select_all_query(sql_text, ruleset.defaults.max_result_rows)
         result = session.execute(capped)

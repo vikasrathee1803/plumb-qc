@@ -103,6 +103,36 @@ def test_rules_pin_and_show(tmp_path: Path, monkeypatch):
     assert "2026.06.0" in show.stdout
 
 
+def test_cli_threads_run_id_into_query_tag(tmp_path: Path, monkeypatch):
+    """Regression: the session must be opened with the run's real run_id so
+    QUERY_TAG is plumb_qc:{run_id}, not plumb_qc:pending. Found via live
+    QUERY_HISTORY."""
+    import json
+
+    from plumb import cli
+    from plumb.connect.snowflake import build_query_tag
+    from tests._fakes import RouteSession
+
+    captured: dict = {}
+
+    def fake_open(ruleset, run_id):
+        captured["run_id"] = run_id
+        session = RouteSession()
+        session.query_tag = build_query_tag(run_id)
+        return session
+
+    monkeypatch.setattr(cli, "_open_session", fake_open)
+    out = tmp_path / "r"
+    runner.invoke(
+        app,
+        ["check", "sql", "--inline", "SELECT a FROM t", "--rules", str(RULES), "--out", str(out)],
+    )
+    report = json.loads((out / "report.json").read_text())
+    assert report["environment"]["query_tag"] == f"plumb_qc:{report['run_id']}"
+    assert report["environment"]["query_tag"] != "plumb_qc:pending"
+    assert captured["run_id"] == report["run_id"]
+
+
 def test_report_open_without_report_exits_3(tmp_path: Path):
     result = runner.invoke(app, ["report", "open", "--path", str(tmp_path)])
     assert result.exit_code == 3

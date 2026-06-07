@@ -57,13 +57,20 @@ ruleset = Ruleset(
         CheckSpec(id="D-GRAIN-001", enabled=True, params={"key": ["customer_id"]}),
         CheckSpec(id="D-NULL-001", enabled=True, params={"key": ["customer_id"]}),
         CheckSpec(id="D-DUP-001", enabled=True),
-        CheckSpec(id="D-FRESH-001", enabled=True, params={"event_ts_col": "last_order_date", "sla_hours": 24}),
+        CheckSpec(
+            id="D-FRESH-001",
+            enabled=True,
+            params={"event_ts_col": "last_order_date", "sla_hours": 24},
+        ),
         CheckSpec(
             id="D-RECON-001",
             enabled=True,
             params={
                 "metric_sql": "SELECT SUM(lifetime_revenue) AS m FROM {{ target }}",
-                "source_of_truth_sql": "SELECT SUM(total_revenue) AS m FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_ORDER_ANALYTICS",
+                "source_of_truth_sql": (
+                    "SELECT SUM(total_revenue) AS m "
+                    "FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_ORDER_ANALYTICS"
+                ),
                 "tolerance_abs": 0,
                 "tolerance_pct": 0.01,
             },

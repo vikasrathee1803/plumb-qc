@@ -96,6 +96,24 @@ def test_freshness_stale_fails():
     assert res.status is Status.FAIL
 
 
+def test_freshness_handles_date_column_vs_tzaware_now():
+    """Regression: a DATE column returns datetime.date, and CURRENT_TIMESTAMP
+    returns a tz-aware datetime. Age must still compute, not WARN. Found on
+    the live native connector run."""
+    from datetime import date, datetime, timezone
+
+    old = date(1998, 8, 2)
+    now = datetime(2026, 6, 7, 12, tzinfo=timezone.utc)
+    session = RouteSession().add(
+        "__PLUMB_MAX_TS", [{"__PLUMB_MAX_TS": old, "__PLUMB_NOW": now}]
+    )
+    res = d_fresh_001(
+        make_ctx(TARGET, session=session), {"event_ts_col": "d", "sla_hours": 24}
+    )
+    assert res.status is Status.FAIL
+    assert "old" in (res.observed or "")
+
+
 def test_freshness_within_sla_passes():
     now = datetime(2026, 6, 7, tzinfo=timezone.utc)
     recent = now - timedelta(hours=2)

@@ -557,9 +557,25 @@ def _to_number(value: Any) -> float | None:
 
 
 def _hours_between(then: Any, now: Any) -> float | None:
-    from datetime import datetime
+    """Age in hours, robust to the types Snowflake returns. A DATE column
+    comes back as datetime.date, a TIMESTAMP as datetime.datetime (often
+    tz-aware). Coerce dates to midnight and normalize both to naive UTC so
+    a DATE freshness column does not silently degrade to a WARN."""
+    from datetime import date, datetime, timezone
 
-    if not isinstance(then, datetime) or not isinstance(now, datetime):
+    def _to_dt(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime(value.year, value.month, value.day)
         return None
-    delta = now - then
-    return delta.total_seconds() / 3600.0
+
+    start = _to_dt(then)
+    end = _to_dt(now)
+    if start is None or end is None:
+        return None
+    if start.tzinfo is not None:
+        start = start.astimezone(timezone.utc).replace(tzinfo=None)
+    if end.tzinfo is not None:
+        end = end.astimezone(timezone.utc).replace(tzinfo=None)
+    return (end - start).total_seconds() / 3600.0
