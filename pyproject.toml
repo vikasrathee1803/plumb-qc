@@ -28,6 +28,7 @@ dependencies = [
     "python-multipart==0.0.20",
     "anthropic==0.42.0",
     "httpx==0.28.1",
+    "tableauserverclient==0.36",
 ]
 
 [project.optional-dependencies]
