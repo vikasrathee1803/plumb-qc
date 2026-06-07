@@ -1,11 +1,25 @@
 # SPRINT
 
-Updated: 2026-06-07. Phase: 0 complete, awaiting Gate 0 approval.
+Updated: 2026-06-07. Phase: 1 complete, awaiting Gate 1 approval.
 
 ## Now
 
-- GATE 0 review: contracts, registry seam, read-only guard, verdict tests.
-- Blocked on: explicit approval to fan out Phase 1 streams.
+- GATE 1 review (spec-mandated hard stop): all 10 Phase 1 acceptance
+  criteria pass, demonstrated by ID in tests/test_acceptance_phase1.py.
+- Blocked on: explicit approval to begin Phase 2, plus PLUMB_WH
+  provisioning for the live QUERY_HISTORY confirmation of AC6.
+- 201 tests pass, ruff clean, mypy clean, no em dashes.
+
+## Phase 1 burndown (all done)
+
+- [x] Stream A: sql_static (S-LINT, S-STAT-001..010), sql_meta (S-META-001..004)
+- [x] Stream B: sql_assertions (D-GRAIN/NULL/RI/DOMAIN/RANGE/FRESH/RECON/DUP/ADD)
+- [x] Stream C: baseline/store.py (Parquet + Protocol seam), sql_regression (R-DIFF, R-AGG)
+- [x] Stream D: sql_performance (P-PROF/COST/SPILL/CARD)
+- [x] Stream E: report writers (HTML self-contained, JSON, JUnit)
+- [x] Integration: engine/runner.py, audit JSONL, full CLI surface
+- [x] Coverage check-level gaps (ADR-0009), evidence redaction pipeline
+- [x] One-plus fixture test per family; acceptance suite by criterion ID
 
 ## Phase 0 burndown (all done)
 
