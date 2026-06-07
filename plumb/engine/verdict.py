@@ -26,6 +26,7 @@ from plumb.engine.models import (
     CheckResult,
     Coverage,
     Severity,
+    SkippedCheck,
     SkippedFamily,
     Status,
     Summary,
@@ -135,4 +136,41 @@ def compute_coverage(
         SkippedFamily(family=family, reason=reason)
         for family, reason in sorted(skipped.items(), key=lambda kv: _RISK_RANK[kv[0]])
     ]
-    return Coverage(families_run=families_run, families_skipped=families_skipped)
+
+    # Capability gaps: enabled checks that skipped inside a family that
+    # otherwise ran. A fully skipped family is already shown above, so its
+    # checks are not repeated here.
+    run_set = set(families_run)
+    skipped_checks: list[SkippedCheck] = []
+    for family in run_set:
+        for check in results_by_family.get(family, []):
+            if check.status is Status.SKIP:
+                skipped_checks.append(
+                    SkippedCheck(
+                        id=check.id,
+                        name=check.name,
+                        family=check.family,
+                        reason=check.observed or "skipped",
+                    )
+                )
+    skipped_checks.sort(key=lambda c: (_RISK_RANK[c.family], c.id))
+
+    return Coverage(
+        families_run=families_run,
+        families_skipped=families_skipped,
+        checks_skipped=skipped_checks,
+    )
+
+
+def coverage_caption(coverage: Coverage) -> str:
+    """A short human qualifier for the verdict headline, for example
+    'limited coverage: reconciliation skipped; regression: no baseline
+    found'. Empty when nothing was skipped."""
+    parts: list[str] = []
+    for check in coverage.checks_skipped:
+        parts.append(f"{check.name.split(' on ')[0].lower()} skipped")
+    for family in coverage.families_skipped:
+        parts.append(f"{family.family.value}: {family.reason}")
+    if not parts:
+        return ""
+    return "limited coverage: " + "; ".join(parts)

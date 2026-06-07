@@ -94,14 +94,28 @@ class SkippedFamily(BaseModel):
     reason: str
 
 
+class SkippedCheck(BaseModel):
+    """A capability gap: a check that was enabled but did not run, inside a
+    family that otherwise ran. Surfaces things like reconciliation skipped
+    even when the rest of the assertions family executed (ADR-0009)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    family: CheckFamily
+    reason: str
+
+
 class Coverage(BaseModel):
-    """The honesty mechanism. families_skipped is ranked so the most
-    important unchecked risk is first."""
+    """The honesty mechanism. families_skipped and checks_skipped are each
+    ranked so the most important unchecked risk is first."""
 
     model_config = ConfigDict(extra="forbid")
 
     families_run: list[CheckFamily] = Field(default_factory=list)
     families_skipped: list[SkippedFamily] = Field(default_factory=list)
+    checks_skipped: list[SkippedCheck] = Field(default_factory=list)
 
 
 class Summary(BaseModel):

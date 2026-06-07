@@ -27,6 +27,7 @@ SPEC_EXAMPLE = {
     "coverage": {
         "families_run": ["static", "metadata", "assertions", "performance"],
         "families_skipped": [{"family": "regression", "reason": "no baseline found"}],
+        "checks_skipped": [],
     },
     "summary": {
         "blocker": 1,
