@@ -41,6 +41,29 @@ warehouse: "PLUMB_WH"
 4. Key-pair users: key at ~/.plumb/keys/, passphrase in the OS keychain
    (service "plumb") or PLUMB_PRIVATE_KEY_PASSPHRASE.
 
+### OAuth setup (the configured method here)
+
+connection.yml uses authenticator: oauth. Provide the token out of band:
+
+```
+# PowerShell, current session only
+$env:PLUMB_OAUTH_TOKEN = "<your oauth token>"
+plumb check sql --query rpt.sql --profile finance
+```
+
+Or store it in the OS keychain under service "plumb", entry
+"oauth_token:{account}:{user}". The token is never written to a file or a
+repo. account, user, role, and warehouse go in ~/.plumb/connection.yml.
+
+### Tableau
+
+```
+plumb check tableau --workbook dashboard.twbx --profile finance
+```
+
+No Snowflake connection is needed for Tableau static analysis; it parses
+the .twb or .twbx locally.
+
 ## CI
 
 - Build the image from the Dockerfile; mount the key; gate on exit code

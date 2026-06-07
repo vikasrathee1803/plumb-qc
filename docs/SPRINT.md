@@ -1,14 +1,34 @@
 # SPRINT
 
-Updated: 2026-06-07. Phase: 1 complete, awaiting Gate 1 approval.
+Updated: 2026-06-07. Phase: 1 complete; Phase 2 in progress (Tableau static
+done, live Snowflake demonstrated).
 
 ## Now
 
-- GATE 1 review (spec-mandated hard stop): all 10 Phase 1 acceptance
-  criteria pass, demonstrated by ID in tests/test_acceptance_phase1.py.
-- Blocked on: explicit approval to begin Phase 2, plus PLUMB_WH
-  provisioning for the live QUERY_HISTORY confirmation of AC6.
-- 201 tests pass, ruff clean, mypy clean, no em dashes.
+- Phase 2 underway at the user's direction (live Snowflake + Tableau).
+- Done this round: Tableau static catalog (T-*), live engine run against
+  real Snowflake data via the MCP connection, two live-found bugs fixed
+  (Click help crash, full_dup_query grouping), OAuth profile scaffolded.
+- 227 tests pass, ruff clean, mypy clean, no em dashes.
+- Blocked on the user for: account/user/role/warehouse + OAuth token to
+  complete the fully-native live run; decisions on web UI and AI assist.
+
+## Live verification (real data, PORTFOLIO_DEMO_DB.ANALYTICS)
+
+- Plumb's generated SQL runs clean on live Snowflake (grain, null, dup,
+  recon, freshness queries validated against V_CUSTOMER_LTV, 99,996 rows).
+- Real verdict: BLOCKED. Grain/null/dup PASS; freshness FAIL (1990s data);
+  recon FAIL (two views off by 907B). All true findings.
+- AC6 (query tag, PLUMB_WH, timeout, row cap) still needs the native
+  connector against a provisioned warehouse to confirm in QUERY_HISTORY;
+  the MCP transport does not set those session params.
+
+## Phase 2 remaining
+
+- [ ] Web UI: FastAPI wrapping the engine + Vite/React SPA
+- [ ] AI assist (opt-in): explain / fix / recon SQL, never sets a status
+- [ ] Shared baseline store (Snowflake stage or object store)
+- [x] Tableau static analysis (T-* catalog)
 
 ## Phase 1 burndown (all done)
 
