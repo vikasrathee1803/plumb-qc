@@ -1,0 +1,49 @@
+"""Local audit trail: one JSON line per run.
+
+Every run appends who, when, target, ruleset version, and verdict to a
+local JSON-lines file. This is the local audit sink; Phase 2 may add a
+central sink behind the same write_audit_record call.
+"""
+
+from __future__ import annotations
+
+import getpass
+import json
+from pathlib import Path
+
+from plumb.engine.models import RunResult, utc_now
+
+AUDIT_HOME = Path.home() / ".plumb"
+AUDIT_FILE = AUDIT_HOME / "audit.jsonl"
+
+
+def audit_record(result: RunResult, *, user: str | None = None) -> dict[str, object]:
+    return {
+        "run_id": result.run_id,
+        "timestamp": utc_now().isoformat(),
+        "user": user or _current_user(),
+        "target_type": result.target.type,
+        "target_name": result.target.name,
+        "source_ref": result.target.source_ref,
+        "ruleset_version": result.ruleset_version,
+        "profile": result.profile,
+        "verdict": result.verdict.value,
+    }
+
+
+def write_audit_record(
+    result: RunResult, path: Path | None = None, *, user: str | None = None
+) -> Path:
+    target = path or AUDIT_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(audit_record(result, user=user), default=str)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+    return target
+
+
+def _current_user() -> str:
+    try:
+        return getpass.getuser()
+    except Exception:  # noqa: BLE001 - audit must never crash a run
+        return "unknown"
