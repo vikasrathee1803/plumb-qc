@@ -63,6 +63,20 @@ class Thresholds(BaseModel):
     freshness_sla_hours_default: float = Field(default=24.0, gt=0)
 
 
+# Column-name patterns treated as PII in evidence samples by default.
+# Rulesets and profiles can extend this list.
+DEFAULT_PII_COLUMN_PATTERNS: tuple[str, ...] = (
+    r"(?i)email",
+    r"(?i)phone",
+    r"(?i)\bssn\b|social_security",
+    r"(?i)address",
+    r"(?i)(first|last|full)_?name",
+    r"(?i)birth|\bdob\b",
+    r"(?i)passport|driver_?license",
+    r"(?i)\bip_?address\b",
+)
+
+
 class CheckSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -84,7 +98,22 @@ class Ruleset(BaseModel):
     certified_sources: list[str] = Field(default_factory=list)
     severity_overrides: dict[str, Severity] = Field(default_factory=dict)
     thresholds: Thresholds = Field(default_factory=Thresholds)
+    pii_column_patterns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_PII_COLUMN_PATTERNS)
+    )
     checks: list[CheckSpec] = Field(default_factory=list)
+
+    @field_validator("pii_column_patterns")
+    @classmethod
+    def _pii_patterns_compile(cls, value: list[str]) -> list[str]:
+        for pattern in value:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"invalid PII column pattern {pattern!r}: {exc}"
+                ) from exc
+        return value
 
     @field_validator("version")
     @classmethod
@@ -119,6 +148,7 @@ class Profile(BaseModel):
     certified_sources: list[str] = Field(default_factory=list)
     severity_overrides: dict[str, Severity] = Field(default_factory=dict)
     thresholds: dict[str, Any] = Field(default_factory=dict)
+    pii_column_patterns: list[str] = Field(default_factory=list)
     checks: list[CheckSpec] = Field(default_factory=list)
 
 

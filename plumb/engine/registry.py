@@ -119,3 +119,16 @@ def is_registered(check_id: str) -> bool:
 def reset_registry() -> None:
     """Test seam only. Production code never calls this."""
     _REGISTRY.clear()
+
+
+def registry_snapshot() -> dict[str, CheckDefinition]:
+    """Test seam: capture the registry so a test can restore it after
+    mutating. Check modules register at import time, so a test that
+    clears the registry without restoring would break later tests."""
+    return dict(_REGISTRY)
+
+
+def restore_registry(snapshot: dict[str, CheckDefinition]) -> None:
+    """Test seam: restore a snapshot taken with registry_snapshot."""
+    _REGISTRY.clear()
+    _REGISTRY.update(snapshot)

@@ -18,15 +18,18 @@ from plumb.engine.registry import (
     get_check,
     is_registered,
     register_check,
+    registry_snapshot,
     reset_registry,
+    restore_registry,
 )
 
 
 @pytest.fixture(autouse=True)
 def clean_registry():
+    snapshot = registry_snapshot()
     reset_registry()
     yield
-    reset_registry()
+    restore_registry(snapshot)
 
 
 def _result(check_id: str) -> CheckResult:
