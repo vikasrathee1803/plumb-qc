@@ -41,11 +41,35 @@ Exit codes for CI: 0 passing, 1 REVIEW, 2 BLOCKED, 3 tool error.
 - Auth is key-pair, externalbrowser SSO, or OAuth. No passwords, no
   secrets in config or source.
 
+## Web UI (Phase 2)
+
+```
+cd web/ui && npm install && npm run build      # once
+plumb web                                       # serves API + SPA on :8000
+```
+
+The web UI wraps the same engine and renders the same verdict, coverage,
+and report as the CLI. Run a SQL check or upload a .twb/.twbx.
+
+## AI assist (Phase 2, opt-in)
+
+`plumb check sql --query f.sql --explain` attaches plain-English
+explanations to failing checks. It runs only after the verdict is decided
+and never changes a status. Needs ANTHROPIC_API_KEY (env or OS keychain);
+without it, the run is unaffected.
+
+## Shared baselines (Phase 2)
+
+Point all analysts at one baseline location (a network share or mounted
+object store) via ~/.plumb/baselines.yml ({kind: shared, path: ...}) or
+PLUMB_BASELINE_DIR. Never a Snowflake write (ADR-0012).
+
 ## Project state
 
-Phase 0 (engine core contracts) is complete. Phase 1 (SQL engine end to
-end) is next. See docs/SPRINT.md for live status and docs/ARCHITECTURE.md
-for the contracts.
+Phases 0, 1, and 2 are complete: SQL engine, Tableau static analysis, web
+UI, opt-in AI assist, shared baselines. Verified against live Snowflake.
+Phase 3 (Tableau live reconciliation and lineage) is deferred. See
+docs/SPRINT.md for status and docs/ARCHITECTURE.md for the contracts.
 
 ## Development
 

@@ -23,12 +23,16 @@ done, live Snowflake demonstrated).
   connector against a provisioned warehouse to confirm in QUERY_HISTORY;
   the MCP transport does not set those session params.
 
-## Phase 2 remaining
+## Phase 2 status: complete
 
-- [ ] Web UI: FastAPI wrapping the engine + Vite/React SPA
-- [ ] AI assist (opt-in): explain / fix / recon SQL, never sets a status
-- [ ] Shared baseline store (Snowflake stage or object store)
 - [x] Tableau static analysis (T-* catalog)
+- [x] Shared baseline store (configured path / mounted object store, ADR-0012)
+- [x] AI assist (opt-in): explain / fix / recon SQL, never sets a status
+- [x] Web UI: FastAPI wrapping the engine + Vite/React SPA, one command
+
+Live native Snowflake confirmed (AC6 verified in QUERY_HISTORY). 260 tests
+pass, ruff + mypy clean, no em dashes. Web UI verified live over HTTP:
+SQL check BLOCKED, Tableau upload REVIEW, self-contained HTML report.
 
 ## Phase 1 burndown (all done)
 
