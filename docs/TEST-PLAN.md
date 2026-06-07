@@ -15,6 +15,19 @@ QA owns this file and has veto on done. Run: `.venv\Scripts\python -m pytest`
 | Session | tests/test_connect_session.py | query tag, timeout, warehouse, role on every connection; row cap with truncation flag; guard runs before any cursor activity; auth kwargs per path; no password key ever; secrets only from env or keyring |
 | Exit codes | tests/test_cli_exit_codes.py | full verdict x fail_on matrix per ADR-0005 |
 
+## Phase 2 coverage (added)
+
+| Area | File | What is proven |
+|---|---|---|
+| Tableau static | tests/test_checks_tableau.py | lxml parser plus the T-* catalog against a fixture .twb; .twbx zip read; target-type isolation |
+| Shared baseline | tests/test_baseline_store.py | local and shared stores satisfy the Protocol; factory; shared index; a teammate store at the same path reproduces the diff |
+| AI assist | tests/test_ai_assist.py | tolerant JSON parser; explain attaches only ai_explanation; verdict and all statuses identical with and without; graceful degradation on parse/exception; fix and recon contracts |
+| Web backend | tests/test_web_api.py | every endpoint returns the RunResult contract via the same engine; SQL, Tableau upload, profiles, report HTML, SPA served |
+| Phase 2 acceptance | tests/test_acceptance_phase2.py | P2-AC1..AC4 by ID, including web-equals-CLI verdict equivalence |
+| SQL builder shapes | tests/test_sql_builders.py | generated SQL passes the read-only guard; full-dup grouping; no force-quoting; safe literals |
+
+SPA build (not a pytest target): `cd web/ui && npm install && npm run build`.
+
 ## Phase 1 additions (planned)
 
 - One fixture-backed test per check family minimum (spec mandate);
