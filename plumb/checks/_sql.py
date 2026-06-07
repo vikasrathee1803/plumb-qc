@@ -84,9 +84,13 @@ def row_count_query(sql: str) -> str:
 
 
 def full_dup_query(sql: str) -> str:
+    # SELECT * so GROUP BY ALL groups by every column (the whole row). With
+    # SELECT COUNT(*) there are no non-aggregate columns, so GROUP BY ALL
+    # would group by nothing and always report one group for a non-empty
+    # table. Verified against live Snowflake.
     body = (
         f"SELECT COUNT(*) AS __PLUMB_DUP_ROWS FROM (\n"
-        f"  SELECT COUNT(*) AS c FROM {TARGET_CTE} GROUP BY ALL HAVING COUNT(*) > 1\n"
+        f"  SELECT * FROM {TARGET_CTE} GROUP BY ALL HAVING COUNT(*) > 1\n"
         f")"
     )
     return wrap_target(sql, body)
