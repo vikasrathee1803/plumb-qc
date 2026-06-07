@@ -17,13 +17,14 @@ from rich.console import Console
 from rich.table import Table
 
 from plumb import __version__
-from plumb.baseline.store import LocalParquetStore, make_baseline
+from plumb.baseline.store import BaselineStore, make_baseline, make_baseline_store
 from plumb.checks._sql import SqlParseError, select_all_query
 from plumb.checks._tableau import TableauParseError, parse_workbook
 from plumb.config.loader import (
     CONNECTION_FILE,
     PLUMB_HOME,
     ConfigError,
+    load_baseline_store_config,
     load_connection_profile,
     load_profile,
     load_ruleset,
@@ -175,6 +176,29 @@ def rules_pull(
 
 # --- init ---------------------------------------------------------------
 
+@app.command("web")
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
+    port: int = typer.Option(8000, "--port", help="Bind port."),
+) -> None:
+    """Launch the local web UI (FastAPI plus the React SPA) from one command."""
+    import sys
+
+    # web/ is a top-level sibling of the plumb package, not part of the
+    # installed wheel, so ensure the repo root is importable.
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    try:
+        import uvicorn
+
+        from web.api.app import app as web_app
+    except ImportError as exc:
+        raise _fail(f"web extras not available: {exc}") from exc
+    console.print(f"Plumb web UI on [bold]http://{host}:{port}[/bold]  (ctrl-c to stop)")
+    uvicorn.run(web_app, host=host, port=port, log_level="warning")
+
+
 @app.command("init")
 def init() -> None:
     """Scaffold a connection profile and a sample check spec."""
@@ -213,11 +237,6 @@ def check(
     """Run the checks and write the HTML, JSON, and JUnit reports."""
     if kind not in ("sql", "tableau"):
         raise _fail(f"unsupported check kind {kind!r}; use 'sql' or 'tableau'")
-    if explain:
-        err_console.print(
-            "[yellow]note:[/yellow] --explain is a Phase 2 feature and does not "
-            "alter any verdict; ignoring for now."
-        )
 
     ruleset = _resolve_ruleset(rules, profile)
     # Generate the run id up front so the session's QUERY_TAG carries the
@@ -232,7 +251,7 @@ def check(
     else:
         sql_text, target = _load_target(query, inline)
         request_kwargs["sql_text"] = sql_text
-        request_kwargs["baseline_store"] = LocalParquetStore()
+        request_kwargs["baseline_store"] = _baseline_store()
         request_kwargs["baseline_name"] = baseline
         if not static_only:
             session = _open_session(ruleset, run_id)
@@ -246,6 +265,9 @@ def check(
     finally:
         if session is not None:
             session.close()
+
+    if explain:
+        _attach_ai_explanations(result, request_kwargs.get("sql_text"))
 
     out_dir = out or LATEST_DIR
     _write_reports(result, out_dir)
@@ -285,7 +307,7 @@ def baseline_update(
 @baseline_app.command("list")
 def baseline_list() -> None:
     """List saved baselines."""
-    names = LocalParquetStore().list_names()
+    names = _baseline_store().list_names()
     if not names:
         console.print("no baselines saved")
         return
@@ -322,6 +344,31 @@ def _load_target(query: Path | None, inline: str | None) -> tuple[str, Target]:
     if inline:
         return inline, Target(type="sql", name="inline", source_ref=None)
     raise _fail("provide SQL with --query PATH or --inline 'SELECT ...'")
+
+
+def _baseline_store() -> BaselineStore:
+    cfg = load_baseline_store_config()
+    path = Path(cfg.path) if cfg.path else None
+    return make_baseline_store(cfg.kind, path)
+
+
+def _attach_ai_explanations(result: RunResult, sql_text: str | None) -> None:
+    """Opt-in: attach AI explanations to failing checks after the verdict is
+    decided. Never changes a status. Degrades to a note if no key is set."""
+    from plumb.ai import attach_explanations, get_client
+
+    client = get_client()
+    if client is None:
+        err_console.print(
+            "[yellow]note:[/yellow] --explain set but no Anthropic API key found; "
+            "skipping explanations. The verdict is unaffected."
+        )
+        return
+    verdict_before = result.verdict
+    attach_explanations(result, client, sql_text)
+    # Invariant guard: the assist layer must never move a verdict.
+    if result.verdict is not verdict_before:  # pragma: no cover - defensive
+        raise _fail("internal error: AI assist altered the verdict")
 
 
 def _load_workbook(workbook: Path | None) -> tuple[Target, object]:
@@ -420,7 +467,7 @@ def _do_baseline(
     baseline = make_baseline(
         name, columns, result.rows, source_ref=str(query), ruleset_version=ruleset.version
     )
-    LocalParquetStore().save(baseline)
+    _baseline_store().save(baseline)
     console.print(f"{verb} baseline [bold]{name}[/bold] ({baseline.row_count} rows)")
 
 

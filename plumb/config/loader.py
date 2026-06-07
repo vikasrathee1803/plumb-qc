@@ -17,11 +17,18 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from plumb.config.models import ConnectionProfile, Profile, Ruleset
+from plumb.config.models import (
+    BaselineStoreConfig,
+    ConnectionProfile,
+    Profile,
+    Ruleset,
+)
 
 PLUMB_HOME = Path.home() / ".plumb"
 PIN_FILE = PLUMB_HOME / "rules.pin"
 CONNECTION_FILE = PLUMB_HOME / "connection.yml"
+BASELINES_CONFIG_FILE = PLUMB_HOME / "baselines.yml"
+ENV_BASELINE_DIR = "PLUMB_BASELINE_DIR"
 
 
 class ConfigError(Exception):
@@ -131,6 +138,24 @@ def load_connection_profile(path: Path | None = None) -> ConnectionProfile:
     raw = load_yaml_mapping(target)
     try:
         return ConnectionProfile.model_validate(raw)
+    except ValidationError as exc:
+        raise ConfigError(_format_validation_error(target, exc)) from exc
+
+
+def load_baseline_store_config(path: Path | None = None) -> BaselineStoreConfig:
+    """Resolve the baseline store config. PLUMB_BASELINE_DIR (a shared path)
+    wins; then ~/.plumb/baselines.yml; otherwise the local default."""
+    import os
+
+    env_dir = os.environ.get(ENV_BASELINE_DIR)
+    if env_dir:
+        return BaselineStoreConfig(kind="shared", path=env_dir)
+    target = path or BASELINES_CONFIG_FILE
+    if not target.exists():
+        return BaselineStoreConfig()
+    raw = load_yaml_mapping(target)
+    try:
+        return BaselineStoreConfig.model_validate(raw)
     except ValidationError as exc:
         raise ConfigError(_format_validation_error(target, exc)) from exc
 

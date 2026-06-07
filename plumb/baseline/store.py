@@ -141,3 +141,60 @@ class LocalParquetStore:
         if not self.root.exists():
             return []
         return sorted(p.stem for p in self.root.glob("*.parquet"))
+
+
+class SharedFileStore(LocalParquetStore):
+    """A team-shared baseline store: the same Parquet plus manifest layout
+    pointed at a shared location (a network share or a mounted object
+    store such as s3fs or Azure Files). It additionally maintains a shared
+    index.json so the team can see which baselines exist and their
+    provenance. Behind the BaselineStore Protocol, so callers are
+    unchanged (ADR-0012). It never writes to Snowflake, preserving the
+    read-only-everywhere invariant; teammates read the same files.
+    """
+
+    INDEX_NAME = "index.json"
+
+    def _index_path(self) -> Path:
+        return self.root / self.INDEX_NAME
+
+    def save(self, baseline: Baseline) -> None:
+        super().save(baseline)
+        self._update_index(baseline)
+
+    def _update_index(self, baseline: Baseline) -> None:
+        index = self._read_index()
+        index[baseline.name] = {
+            "row_count": baseline.row_count,
+            "created_at": baseline.created_at,
+            "ruleset_version": baseline.ruleset_version,
+            "source_ref": baseline.source_ref,
+        }
+        self._index_path().write_text(
+            json.dumps(index, indent=2, default=str), encoding="utf-8"
+        )
+
+    def _read_index(self) -> dict[str, Any]:
+        path = self._index_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+    def index(self) -> dict[str, Any]:
+        return self._read_index()
+
+
+def make_baseline_store(kind: str = "local", path: Path | None = None) -> BaselineStore:
+    """Factory for the configured store. 'local' uses ~/.plumb/baselines;
+    'shared' uses the configured shared path. New backends slot in here
+    without touching callers."""
+    if kind == "shared":
+        if path is None:
+            raise ValueError("shared baseline store requires a path")
+        return SharedFileStore(path)
+    if kind == "local":
+        return LocalParquetStore(path)
+    raise ValueError(f"unknown baseline store kind: {kind!r}")

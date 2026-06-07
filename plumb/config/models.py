@@ -152,6 +152,24 @@ class Profile(BaseModel):
     checks: list[CheckSpec] = Field(default_factory=list)
 
 
+class BaselineStoreConfig(BaseModel):
+    """Where baselines live. 'local' is per-machine; 'shared' points at a
+    team location (network share or mounted object store). Configured in
+    ~/.plumb/baselines.yml or via PLUMB_BASELINE_DIR. Never a Snowflake
+    write target; see ADR-0012."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["local", "shared"] = "local"
+    path: str | None = None
+
+    @model_validator(mode="after")
+    def _shared_needs_path(self) -> "BaselineStoreConfig":
+        if self.kind == "shared" and not self.path:
+            raise ValueError("a shared baseline store requires a path")
+        return self
+
+
 class ConnectionProfile(BaseModel):
     """Local connection settings, never in the rules repo. Password auth
     is rejected by name so it can never sneak in via config."""
