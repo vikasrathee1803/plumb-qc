@@ -37,6 +37,60 @@ function trustLine(result: RunResult): string {
   return `Deterministic and read-only · ${tagged}`;
 }
 
+function reportUrl(result: RunResult): string {
+  return `${window.location.origin}/api/report/${result.run_id}.html`;
+}
+
+// A tidy markdown summary a reviewer can paste into a PR or Slack.
+function summaryMarkdown(result: RunResult): string {
+  const s = result.summary;
+  const failed = (s.blocker ?? 0) + (s.high ?? 0) + (s.medium ?? 0) + (s.low ?? 0);
+  const lines: string[] = [
+    `**Plumb verdict: ${VERDICT_LABEL[result.verdict] ?? result.verdict}** · ${result.target.name}`,
+    plainEnglish(result),
+    `${result.checks.length} checks · ${s.passed} passed · ${failed} failed · ${s.warned} warned · ${s.skipped} skipped`,
+  ];
+  const issues = result.checks.filter((c) => c.status === "FAIL" || c.status === "ERROR");
+  if (issues.length) {
+    lines.push("");
+    for (const c of issues) lines.push(`- ${c.status} ${c.id} (${c.severity}): ${c.observed ?? ""}`);
+  }
+  const gaps = [
+    ...result.coverage.checks_skipped.map((c) => `${c.name}: ${c.reason}`),
+    ...result.coverage.families_skipped.map((f) => `${f.family}: ${f.reason}`),
+  ];
+  if (gaps.length) { lines.push(""); lines.push(`Coverage gaps: ${gaps.join("; ")}`); }
+  lines.push("");
+  lines.push(`Deterministic, read-only. Full report: ${reportUrl(result)}`);
+  return lines.join("\n");
+}
+
+function Actions({ result }: { result: RunResult }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    const text = summaryMarkdown(result);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); document.body.removeChild(ta);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+  return (
+    <div className="actions">
+      <button className={`act ${copied ? "done" : ""}`} onClick={copy}>
+        {copied ? "Copied to clipboard" : "Copy summary"}
+      </button>
+      <a className="act" href={reportUrl(result)}
+        download={`plumb-${result.target.name}.html`}>Download report</a>
+      <a className="act ghost-act" href={reportUrl(result)} target="_blank" rel="noreferrer">Open ↗</a>
+    </div>
+  );
+}
+
 export function Report({ result }: { result: RunResult }) {
   const s = result.summary;
   const cov = result.coverage;
@@ -54,6 +108,8 @@ export function Report({ result }: { result: RunResult }) {
           <div className="vtrust"><span className="shield">⛨</span>{trustLine(result)}</div>
         </div>
       </div>
+
+      <Actions result={result} />
 
       <div className="statstrip">
         <Stat cls="pass" n={s.passed} l="passed" />
@@ -74,9 +130,6 @@ export function Report({ result }: { result: RunResult }) {
             {gaps.map((g, i) => <li key={i}><b>{g.label}</b>: {g.reason}</li>)}
           </ul>
         )}
-        <a className="report-link" href={`/api/report/${result.run_id}.html`} target="_blank" rel="noreferrer">
-          Open full report ↗
-        </a>
       </div>
 
       <div className="results-head"><h3>Checks</h3><span className="note">tap a row for detail</span></div>
