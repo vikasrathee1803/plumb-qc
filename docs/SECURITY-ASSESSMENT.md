@@ -25,13 +25,18 @@ The prioritized set has been implemented in this revision:
 - L-2 (least-privilege role): scripts/snowflake_setup.sql provisions a
   SELECT-only PLUMB_QC role and a dedicated PLUMB_WH; Plumb warns (CLI and UI)
   when a connection uses an administrative role. Done.
-- M-3 (SBOM): the portable build now emits a CycloneDX SBOM.json for CVE
-  scanning. Hash-pinned installs and a CI CVE scan remain recommended (below).
+- M-3 (supply chain): closed. requirements.lock is fully hash-pinned (via
+  pip-compile --generate-hashes); the portable build emits a CycloneDX
+  SBOM.json; CI (.github/workflows/ci.yml) runs pip-audit on the lock and a
+  --require-hashes install check. The dependencies were upgraded on 2026-06-08
+  to clear all 18 CVEs the scan first found (cryptography, starlette/fastapi,
+  jinja2, lxml, pyarrow, pyopenssl, python-multipart, sqlfluff); the scan now
+  reports zero. The live Snowflake path was re-verified on connector 4.6.
 - M-4 (data at rest): guidance below; full-disk encryption remains a
   deployment control, and the finance profile persists no row samples.
 
-The remaining work is operational (SIEM wiring, hash-pinned CI, disk-encryption
-policy), not code.
+The remaining work is operational (point PLUMB_AUDIT_FILE at the SIEM,
+enforce disk encryption, provision the PLUMB_QC role), not code.
 
 ## 1. Overall posture
 

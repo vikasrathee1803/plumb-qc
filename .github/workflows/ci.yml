@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: tests, lint, types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install (pinned, with web extras)
+        run: python -m pip install -e ".[dev]"
+      - name: Build the web UI
+        working-directory: web/ui
+        run: |
+          npm ci
+          npm run build
+      - name: Lint (ruff)
+        run: ruff check plumb web tests scripts
+      - name: Types (mypy)
+        run: mypy plumb web
+      - name: Tests (pytest)
+        run: pytest
+
+  security:
+    name: dependency CVE scan + lock integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: python -m pip install pip-audit==2.10.0
+      # CVE scan of the production dependency set. Accepted, unfixable findings
+      # go in .pip-audit.toml with a justification; everything else fails CI.
+      - name: CVE scan (runtime lock)
+        run: pip-audit --strict --requirement requirements.lock
+      # Prove the hash-pinned lock installs cleanly and every hash matches, so a
+      # tampered or substituted wheel cannot enter a build.
+      - name: Verify hash-pinned install
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/python -m pip install --require-hashes --requirement requirements.lock

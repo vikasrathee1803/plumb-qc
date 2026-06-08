@@ -35,20 +35,20 @@ OUT_ZIP = ROOT / "dist_portable" / "Plumb-Portable-Windows-x64.zip"
 # via Snowflake Cortex through the connector below, so there is no LLM SDK.
 RUNTIME_DEPS = [
     "sqlglot==26.3.8",
-    "sqlfluff==3.3.1",
-    "snowflake-connector-python==3.13.2",
+    "sqlfluff==4.2.2",
+    "snowflake-connector-python==4.6.0",
     "pydantic==2.10.6",
     "PyYAML==6.0.2",
     "typer==0.15.1",
     "click==8.1.8",
     "rich==13.9.4",
-    "jinja2==3.1.5",
-    "pyarrow==18.1.0",
+    "jinja2==3.1.6",
+    "pyarrow==24.0.0",
     "keyring==25.6.0",
-    "lxml==5.3.0",
-    "fastapi==0.115.6",
+    "lxml==6.1.1",
+    "fastapi==0.136.3",
     "uvicorn==0.34.0",
-    "python-multipart==0.0.20",
+    "python-multipart==0.0.32",
     "tableauserverclient==0.36",
 ]
 
