@@ -93,6 +93,30 @@ export function Architecture({ open, onClose, about }: {
               ))}
             </div>
           )}
+
+          {about && about.stack.length > 0 && (
+            <div className="stack-sec">
+              <div className="stack-title">Built with</div>
+              <div className="stack-grid">
+                {about.stack.map((g) => (
+                  <div className="stack-group" key={g.group}>
+                    <div className="stack-glabel">{g.group}</div>
+                    <div className="stack-items">
+                      {g.items.map((it) => (
+                        <span className="techpill" key={it.name}>
+                          {it.name}<span className="ver">{it.version}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="stack-foot">
+                Local-first - pip / pipx installable, version-pinned, with a Dockerfile for the CI gate.
+                One engine behind the CLI, this web UI, and the report writers.
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>

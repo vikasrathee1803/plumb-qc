@@ -281,6 +281,20 @@ table.ev th { color: var(--fg-4); } table.ev td { font-family: ui-monospace, Men
   background: var(--bg-1); border: 1px solid var(--line-1); border-radius: 12px; padding: 11px 14px; }
 .inv .tick { color: var(--pos); font-weight: 700; flex: none; }
 
+/* Tech stack */
+.stack-sec { margin-top: 26px; padding: 20px; background: var(--bg-1); border: 1px solid var(--line-1); border-radius: 16px; }
+.stack-title { font-size: 16px; font-weight: 640; letter-spacing: -0.01em; margin-bottom: 14px; }
+.stack-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.stack-group { }
+.stack-glabel { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--fg-4);
+  font-weight: 700; margin-bottom: 9px; }
+.stack-items { display: flex; flex-wrap: wrap; gap: 7px; }
+.techpill { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--fg-2);
+  background: var(--bg-3); border: 1px solid var(--line-1); border-radius: 999px; padding: 5px 6px 5px 12px; }
+.techpill .ver { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; color: var(--ai-2);
+  background: var(--ai-soft); border-radius: 999px; padding: 2px 8px; }
+.stack-foot { margin-top: 16px; font-size: 12.5px; color: var(--fg-4); line-height: 1.55; }
+
 .caret { color: var(--fg-4); transition: transform 0.15s; font-size: 11px; }
 .caret.open { transform: rotate(90deg); }
 .empty { text-align: center; color: var(--fg-4); padding: 34px; font-size: 14px; }

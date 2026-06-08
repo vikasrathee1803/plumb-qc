@@ -101,6 +101,75 @@ def _open_session(ruleset: Ruleset, run_id: str) -> SnowflakeSession:
         ) from exc
 
 
+def _pkg_version(name: str) -> str | None:
+    import importlib.metadata as meta
+
+    try:
+        return meta.version(name)
+    except meta.PackageNotFoundError:
+        return None
+
+
+def _frontend_versions() -> dict[str, str]:
+    import json
+
+    pkg = REPO_ROOT / "web" / "ui" / "package.json"
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+
+
+def _build_stack() -> list[dict[str, Any]]:
+    import sys
+
+    fe = _frontend_versions()
+    py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    groups: list[tuple[str, list[tuple[str, str | None]]]] = [
+        ("Language", [("Python", py), ("TypeScript", fe.get("typescript"))]),
+        ("SQL parsing & lint", [
+            ("sqlglot", _pkg_version("sqlglot")),
+            ("sqlfluff", _pkg_version("sqlfluff")),
+        ]),
+        ("Snowflake & Tableau", [
+            ("snowflake-connector-python", _pkg_version("snowflake-connector-python")),
+            ("tableauserverclient", _pkg_version("tableauserverclient")),
+            ("lxml", _pkg_version("lxml")),
+        ]),
+        ("Contracts & config", [
+            ("pydantic", _pkg_version("pydantic")),
+            ("PyYAML", _pkg_version("PyYAML")),
+        ]),
+        ("CLI", [("typer", _pkg_version("typer")), ("rich", _pkg_version("rich"))]),
+        ("Reporting & data", [
+            ("Jinja2", _pkg_version("Jinja2")),
+            ("pyarrow", _pkg_version("pyarrow")),
+        ]),
+        ("Web", [
+            ("FastAPI", _pkg_version("fastapi")),
+            ("uvicorn", _pkg_version("uvicorn")),
+            ("React", fe.get("react")),
+            ("Vite", fe.get("vite")),
+        ]),
+        ("AI assist", [
+            ("openai (Groq)", _pkg_version("openai")),
+            ("google-generativeai", _pkg_version("google-generativeai")),
+        ]),
+        ("Quality gates", [
+            ("pytest", _pkg_version("pytest")),
+            ("ruff", _pkg_version("ruff")),
+            ("mypy", _pkg_version("mypy")),
+        ]),
+    ]
+    out: list[dict[str, Any]] = []
+    for label, items in groups:
+        present = [{"name": n, "version": v} for n, v in items if v]
+        if present:
+            out.append({"group": label, "items": present})
+    return out
+
+
 def _maybe_explain(result: RunResult, sql_text: str | None, enabled: bool) -> None:
     if not enabled:
         return
@@ -174,6 +243,7 @@ def create_app() -> FastAPI:
             "families": [{"family": k, "count": v} for k, v in sorted(fam.items())],
             "connection": connected,
             "ai_ready": ai_ready,
+            "stack": _build_stack(),
             "verdict_tiers": ["BLOCKED", "REVIEW", "READY_WITH_NOTES", "READY"],
             "invariants": [
                 "Read-only: the engine refuses any statement that is not a read",

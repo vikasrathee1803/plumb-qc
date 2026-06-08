@@ -65,6 +65,7 @@ export interface About {
   ai_ready: boolean;
   verdict_tiers: string[];
   invariants: string[];
+  stack: { group: string; items: { name: string; version: string }[] }[];
 }
 
 // One configurable check in the UI: enabled flag plus param values keyed by name.

@@ -44,6 +44,10 @@ def test_about_endpoint_reports_live_engine_facts():
     assert "assertions" in fams and "tableau_static" in fams
     assert any("read-only" in inv.lower() for inv in body["invariants"])
     assert "configured" in body["connection"]
+    # tech stack carries real installed versions, grouped by layer
+    stack_names = {it["name"] for g in body["stack"] for it in g["items"]}
+    assert "sqlglot" in stack_names and "pydantic" in stack_names and "FastAPI" in stack_names
+    assert all(it["version"] for g in body["stack"] for it in g["items"])
 
 
 def test_connection_endpoint_reports_configuration():
