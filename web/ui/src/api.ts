@@ -1,4 +1,4 @@
-import type { About, CatalogCheck, CheckState, Connection, RunResult } from "./types";
+import type { About, CatalogCheck, CheckState, Connection, HistoryRun, RunResult } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url);
@@ -16,6 +16,10 @@ export const fetchCatalog = () =>
   getJSON<{ checks: CatalogCheck[] }>("/api/checks").then((d) => d.checks);
 export const fetchRulesetChecks = (name: string) =>
   getJSON<{ version: string; checks: CheckState[] }>(`/api/ruleset?name=${encodeURIComponent(name)}`);
+export const fetchProfileChanges = (name: string) =>
+  getJSON<{ name: string; changes: string[] }>(`/api/profile?name=${encodeURIComponent(name)}`);
+export const fetchHistory = () => getJSON<{ runs: HistoryRun[] }>("/api/history");
+export const fetchRun = (id: string) => getJSON<RunResult>(`/api/run/${id}`);
 
 export async function runSql(body: {
   sql: string;

@@ -1,3 +1,4 @@
+import { useEscape } from "./ui";
 import type { About } from "./types";
 
 const FAMILY_LABEL: Record<string, string> = {
@@ -11,6 +12,7 @@ const VERDICT_LABEL: Record<string, string> = {
 export function Architecture({ open, onClose, about }: {
   open: boolean; onClose: () => void; about: About | null;
 }) {
+  useEscape(open, onClose);
   return (
     <>
       <div className={`scrim ${open ? "open" : ""}`} onClick={onClose} />

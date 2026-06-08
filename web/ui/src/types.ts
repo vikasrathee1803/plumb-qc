@@ -81,3 +81,12 @@ export interface CustomCheck {
   severity: string;
   sql: string;
 }
+
+export interface HistoryRun {
+  run_id: string;
+  verdict: string;
+  target: string;
+  type: string;
+  timestamp: string;
+  checks: number;
+}

@@ -1,4 +1,13 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+
+export function useEscape(active: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [active, onClose]);
+}
 
 export function Switch({ checked, onChange, disabled }: {
   checked: boolean; onChange: (v: boolean) => void; disabled?: boolean;
@@ -39,6 +48,7 @@ export function Segmented<T extends string>({ value, onChange, options, full }: 
 export function Drawer({ open, onClose, title, children }: {
   open: boolean; onClose: () => void; title: string; children: ReactNode;
 }) {
+  useEscape(open, onClose);
   return (
     <>
       <div className={`scrim ${open ? "open" : ""}`} onClick={onClose} />

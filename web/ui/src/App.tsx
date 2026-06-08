@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchAbout, fetchCatalog, fetchConnection, fetchProfiles, fetchRulesetChecks, runSql, runTableau,
+  fetchAbout, fetchCatalog, fetchConnection, fetchHistory, fetchProfileChanges,
+  fetchProfiles, fetchRun, fetchRulesetChecks, runSql, runTableau,
 } from "./api";
 import { Architecture } from "./Architecture";
 import { ChecksEditor, CustomChecksEditor } from "./Customize";
+import { RecentRuns } from "./History";
 import { Report } from "./Report";
 import { Drawer, Segmented, SwitchRow } from "./ui";
-import type { About, CatalogCheck, CheckState, Connection, CustomCheck, RunResult } from "./types";
+import type { About, CatalogCheck, CheckState, Connection, CustomCheck, HistoryRun, RunResult } from "./types";
 
 const SAMPLE_SQL =
   "SELECT customer_id, segment, region, lifetime_revenue, last_order_date\n" +
@@ -19,11 +21,13 @@ const PRESETS: Preset[] = [
   { id: "everything", label: "Everything", rules: "plumb", mode: "all" },
   { id: "minimal", label: "Quick", rules: "plumb", mode: "static" },
 ];
-const STANDARDS = [
-  { id: "", label: "Standard", note: "Balanced. Fails the build on a review-level issue." },
-  { id: "finance", label: "Finance", note: "Strict gate, row samples hidden, 12-hour freshness." },
-  { id: "marketing", label: "Marketing", note: "Lenient. Tolerates 2% nulls and 48-hour-old data." },
-];
+
+function useHistory(): [HistoryRun[], () => void] {
+  const [runs, setRuns] = useState<HistoryRun[]>([]);
+  const refresh = () => { fetchHistory().then((d) => setRuns(d.runs)).catch(() => undefined); };
+  useEffect(refresh, []);
+  return [runs, refresh];
+}
 
 export function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -48,18 +52,16 @@ export function App() {
         <span className="wordmark">plumb<span className="dot">.</span></span>
         <span className="spacer" />
         <span className={`conn ${conn.configured ? "live" : ""}`}>
-          <span className="led" />
-          {conn.configured ? `${conn.account}` : "no connection"}
+          <span className="led" />{conn.configured ? `${conn.account}` : "no connection"}
         </span>
-        <button className="iconbtn" title="How Plumb works" aria-label="How Plumb works"
-          onClick={() => setArchOpen(true)}>
+        <button className="iconbtn" title="How Plumb works" aria-label="How Plumb works" onClick={() => setArchOpen(true)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="5" cy="6" r="2" /><circle cx="5" cy="18" r="2" /><circle cx="19" cy="12" r="2" />
             <path d="M7 6h6a3 3 0 0 1 3 3v1M7 18h6a3 3 0 0 0 3-3v-1" />
           </svg>
         </button>
-        <button className="iconbtn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+        <button className="iconbtn" aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
           {theme === "dark" ? "☀" : "☾"}
         </button>
       </div>
@@ -69,16 +71,37 @@ export function App() {
       <div className="stage">
         <h1 className="h1">Prove it before you ship.</h1>
         <p className="sub">Run trusted checks on a SQL build or a Tableau workbook in seconds.</p>
-
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
           <Segmented value={tab} onChange={setTab}
             options={[{ value: "sql", label: "SQL" }, { value: "tableau", label: "Tableau" }]} />
         </div>
-
         {tab === "sql"
           ? <SqlView conn={conn} profiles={profiles} catalog={catalog} />
           : <TableauView profiles={profiles} catalog={catalog} />}
       </div>
+    </>
+  );
+}
+
+function StandardPicker({ standard, setStandard, profiles }: {
+  standard: string; setStandard: (s: string) => void; profiles: string[];
+}) {
+  const [changes, setChanges] = useState<string[]>([]);
+  useEffect(() => {
+    if (!standard) { setChanges(["The team default. Balanced gate, standard thresholds."]); return; }
+    fetchProfileChanges(standard).then((d) => setChanges(d.changes)).catch(() => setChanges([]));
+  }, [standard]);
+  return (
+    <>
+      <div className="dgroup-label">Standard</div>
+      <div className="preset-pills">
+        <button className={`pill-btn ${standard === "" ? "on" : ""}`} onClick={() => setStandard("")}>Standard</button>
+        {profiles.map((p) => (
+          <button key={p} className={`pill-btn ${standard === p ? "on" : ""}`}
+            onClick={() => setStandard(p)}>{p}</button>
+        ))}
+      </div>
+      <ul className="std-changes">{changes.map((c, i) => <li key={i}>{c}</li>)}</ul>
     </>
   );
 }
@@ -97,9 +120,7 @@ function applyPreset(preset: Preset, catalog: CatalogCheck[], seed: CheckState[]
   return next;
 }
 
-function SqlView({ conn, profiles, catalog }: {
-  conn: Connection; profiles: string[]; catalog: CatalogCheck[];
-}) {
+function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: string[]; catalog: CatalogCheck[] }) {
   const [sql, setSql] = useState(SAMPLE_SQL);
   const [presetId, setPresetId] = useState("customer_ltv");
   const [standard, setStandard] = useState("");
@@ -111,10 +132,11 @@ function SqlView({ conn, profiles, catalog }: {
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [history, refreshHistory] = useHistory();
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const sqlCatalog = useMemo(() => catalog.filter((c) => !c.family.startsWith("tableau")), [catalog]);
-  const standardLabel = STANDARDS.find((s) => s.id === standard)?.label ?? "Standard";
+  const standardLabel = standard || "Standard";
 
   useEffect(() => { setLive(conn.configured); }, [conn.configured]);
   useEffect(() => {
@@ -134,16 +156,24 @@ function SqlView({ conn, profiles, catalog }: {
     setBusy(true); setError(""); setResult(null);
     try {
       const customSpecs: CheckState[] = validCustom.map((c) => ({
-        id: "D-CUSTOM-001", enabled: true,
-        params: { name: c.name, sql: c.sql, severity: c.severity },
+        id: "D-CUSTOM-001", enabled: true, params: { name: c.name, sql: c.sql, severity: c.severity },
       }));
-      setResult(await runSql({
+      const r = await runSql({
         sql, profile: standard || null, rules: preset.rules,
         static_only: !live, explain, checks: [...Object.values(checkState), ...customSpecs],
-      }));
+      });
+      setResult(r); refreshHistory();
     } catch (e) { setError(String(e instanceof Error ? e.message : e)); }
     finally { setBusy(false); }
   }
+  const runRef = useRef(run); runRef.current = run;
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); runRef.current(); }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
   return (
     <>
@@ -152,28 +182,25 @@ function SqlView({ conn, profiles, catalog }: {
           <span className="lab">Your SQL build</span>
           <textarea value={sql} rows={6} spellCheck={false} onChange={(e) => setSql(e.target.value)} />
         </label>
-
         <div className="setup">
-          <span className="desc">
-            <b>{enabledCount}</b> checks · <b>{preset.label}</b> preset · <b>{standardLabel}</b> standard
-          </span>
+          <span className="desc"><b>{enabledCount}</b> checks · <b>{preset.label}</b> preset · <b>{standardLabel}</b> standard</span>
           <button className="linkbtn" onClick={() => setDrawer(true)}>Customize</button>
         </div>
-
         <div className="toggles">
           <SwitchRow checked={live} onChange={setLive} disabled={!conn.configured}
             label={conn.configured ? "Run live against Snowflake" : "Live (no connection)"} />
           <SwitchRow checked={explain} onChange={setExplain} label="Explain failures with AI" />
         </div>
-
         <button className="run" onClick={run} disabled={busy || !enabledCount}>
-          {busy ? <><span className="spin" />Running</> : `Run ${enabledCount} checks`}
+          {busy ? <><span className="spin" />Running</> : <>Run {enabledCount} checks <kbd>⌘↵</kbd></>}
         </button>
         {error && <p className="error">{error}</p>}
       </div>
 
+      <RecentRuns runs={history} onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
+
       {result ? <Report result={result} />
-        : <div className="empty">Ready when you are. Adjust anything in Customize.</div>}
+        : <div className="empty">Ready when you are. Press <kbd>⌘↵</kbd> to run, or open Customize.</div>}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title="Customize checks">
         <div className="dgroup-label">Preset</div>
@@ -184,16 +211,7 @@ function SqlView({ conn, profiles, catalog }: {
           ))}
         </div>
         <div className="note">A starting set of checks. Switch any on or off below.</div>
-
-        <div className="dgroup-label">Standard</div>
-        <div className="preset-pills">
-          {STANDARDS.filter((s) => s.id === "" || profiles.includes(s.id)).map((s) => (
-            <button key={s.id} className={`pill-btn ${s.id === standard ? "on" : ""}`}
-              onClick={() => setStandard(s.id)}>{s.label}</button>
-          ))}
-        </div>
-        <div className="note">{STANDARDS.find((s) => s.id === standard)?.note}</div>
-
+        <StandardPicker standard={standard} setStandard={setStandard} profiles={profiles} />
         <ChecksEditor catalog={sqlCatalog} state={checkState} setState={setCheckState} />
         <CustomChecksEditor checks={custom} setChecks={setCustom} />
       </Drawer>
@@ -209,6 +227,7 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [history, refreshHistory] = useHistory();
 
   const tabCatalog = useMemo(() => catalog.filter((c) => c.family.startsWith("tableau")), [catalog]);
   useEffect(() => {
@@ -226,7 +245,7 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
   async function run() {
     if (!file) { setError("Choose a .twb or .twbx file first."); return; }
     setBusy(true); setError(""); setResult(null);
-    try { setResult(await runTableau(file, standard || null, Object.values(checkState))); }
+    try { setResult(await runTableau(file, standard || null, Object.values(checkState))); refreshHistory(); }
     catch (e) { setError(String(e instanceof Error ? e.message : e)); }
     finally { setBusy(false); }
   }
@@ -240,29 +259,23 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
             : <><strong>Choose a .twb or .twbx</strong><div className="note">parsed locally, no Tableau Server access</div></>}
           <input type="file" accept=".twb,.twbx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </label>
-
         <div className="setup">
-          <span className="desc"><b>{enabledCount}</b> workbook checks · <b>{STANDARDS.find((s) => s.id === standard)?.label ?? "Standard"}</b> standard</span>
+          <span className="desc"><b>{enabledCount}</b> workbook checks · <b>{standard || "Standard"}</b> standard</span>
           <button className="linkbtn" onClick={() => setDrawer(true)}>Customize</button>
         </div>
-
         <button className="run" onClick={run} disabled={busy}>
           {busy ? <><span className="spin" />Parsing</> : `Check workbook (${enabledCount} checks)`}
         </button>
         {error && <p className="error">{error}</p>}
       </div>
 
+      <RecentRuns runs={history} onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
+
       {result ? <Report result={result} />
         : <div className="empty">Upload a workbook to run the Tableau checks.</div>}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title="Customize checks">
-        <div className="dgroup-label">Standard</div>
-        <div className="preset-pills">
-          <button className={`pill-btn ${standard === "" ? "on" : ""}`} onClick={() => setStandard("")}>Standard</button>
-          {profiles.map((p) => (
-            <button key={p} className={`pill-btn ${standard === p ? "on" : ""}`} onClick={() => setStandard(p)}>{p}</button>
-          ))}
-        </div>
+        <StandardPicker standard={standard} setStandard={setStandard} profiles={profiles} />
         <ChecksEditor catalog={tabCatalog} state={checkState} setState={setCheckState} />
       </Drawer>
     </>

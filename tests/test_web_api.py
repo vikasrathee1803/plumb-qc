@@ -50,6 +50,34 @@ def test_about_endpoint_reports_live_engine_facts():
     assert all(it["version"] for g in body["stack"] for it in g["items"])
 
 
+def test_profile_diff_is_computed_from_yaml():
+    r = client.get("/api/profile?name=finance")
+    assert r.status_code == 200
+    changes = r.json()["changes"]
+    text = " ".join(changes)
+    assert "READY_WITH_NOTES" in text  # finance fails at a stricter gate
+    assert any("aggregate" in c.lower() or "sample" in c.lower() for c in changes)
+
+
+def test_unknown_profile_diff_is_400():
+    assert client.get("/api/profile?name=nope").status_code == 400
+
+
+def test_history_records_runs_and_run_detail_round_trips():
+    run = client.post(
+        "/api/check/sql", json={"sql": "SELECT a FROM t, u", "static_only": True}
+    ).json()
+    hist = client.get("/api/history").json()["runs"]
+    assert any(h["run_id"] == run["run_id"] and h["verdict"] == "BLOCKED" for h in hist)
+    detail = client.get(f"/api/run/{run['run_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["run_id"] == run["run_id"]
+
+
+def test_run_detail_unknown_is_404():
+    assert client.get("/api/run/nope").status_code == 404
+
+
 def test_connection_endpoint_reports_configuration():
     r = client.get("/api/connection")
     assert r.status_code == 200

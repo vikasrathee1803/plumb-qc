@@ -2,11 +2,40 @@ import { useState } from "react";
 import type { CheckResult, RunResult } from "./types";
 
 const VERDICT_LABEL: Record<string, string> = {
-  BLOCKED: "Blocked", REVIEW: "Review", READY_WITH_NOTES: "Ready with notes", READY: "Ready",
+  BLOCKED: "Blocked", REVIEW: "Review", READY_WITH_NOTES: "Ready, with notes", READY: "Ready",
 };
 const VERDICT_GLYPH: Record<string, string> = {
   BLOCKED: "✕", REVIEW: "!", READY_WITH_NOTES: "✓", READY: "✓",
 };
+
+// A calm, human one-liner: what it means and what to do next.
+function plainEnglish(result: RunResult): string {
+  const failed = result.checks.filter((c) => c.status === "FAIL");
+  const blockers = failed.filter((c) => c.severity === "BLOCKER");
+  const highs = failed.filter((c) => c.severity === "HIGH");
+  const top = (blockers[0] ?? highs[0] ?? failed[0])?.name;
+  switch (result.verdict) {
+    case "READY":
+      return `Good to ship. ${result.summary.passed} checks passed, nothing failed.`;
+    case "READY_WITH_NOTES": {
+      const notes = (result.summary.medium ?? 0) + (result.summary.low ?? 0) + (result.summary.warned ?? 0);
+      return `Safe to ship, with ${notes} advisory item${notes === 1 ? "" : "s"} worth a glance.`;
+    }
+    case "REVIEW":
+      return `Have someone review before shipping. ${highs.length} high-severity issue${highs.length === 1 ? "" : "s"}${top ? `, starting with ${top}.` : "."}`;
+    case "BLOCKED":
+      return `Not ready to ship. ${blockers.length} blocker${blockers.length === 1 ? "" : "s"}${top ? `: ${top}.` : "."}`;
+    default:
+      return "";
+  }
+}
+
+function trustLine(result: RunResult): string {
+  const tagged = result.environment.query_tag
+    ? `every query tagged ${result.environment.query_tag.split(":")[0]}:* on ${result.environment.warehouse}`
+    : "parsed without connecting";
+  return `Deterministic and read-only · ${tagged}`;
+}
 
 export function Report({ result }: { result: RunResult }) {
   const s = result.summary;
@@ -19,12 +48,10 @@ export function Report({ result }: { result: RunResult }) {
     <>
       <div className={`verdict v-${result.verdict}`}>
         <div className="ring">{VERDICT_GLYPH[result.verdict] ?? "•"}</div>
-        <div>
+        <div className="vmain">
           <div className="vtitle">{VERDICT_LABEL[result.verdict] ?? result.verdict}</div>
-          <div className="vsub">
-            <b>{result.target.name}</b> · {result.checks.length} checks ·
-            {result.environment.query_tag ? ` live on ${result.environment.warehouse}` : " static"}
-          </div>
+          <div className="vsentence">{plainEnglish(result)}</div>
+          <div className="vtrust"><span className="shield">⛨</span>{trustLine(result)}</div>
         </div>
       </div>
 

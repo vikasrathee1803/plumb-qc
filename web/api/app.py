@@ -47,8 +47,24 @@ PROFILES_DIR = REPO_ROOT / "rules" / "profiles"
 SPA_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
 # Reports are held in memory by run_id so the SPA can request the
-# self-contained HTML for the run it just executed.
+# self-contained HTML for the run it just executed. _HISTORY is the ordered
+# index (most recent first) for the recent-runs view.
 _REPORTS: dict[str, RunResult] = {}
+_HISTORY: list[dict[str, Any]] = []
+_HISTORY_CAP = 25
+
+
+def _record(result: RunResult) -> None:
+    _REPORTS[result.run_id] = result
+    _HISTORY.insert(0, {
+        "run_id": result.run_id,
+        "verdict": result.verdict.value,
+        "target": result.target.name,
+        "type": result.target.type,
+        "timestamp": result.timestamp.isoformat(),
+        "checks": len(result.checks),
+    })
+    del _HISTORY[_HISTORY_CAP:]
 
 
 class CheckConfig(BaseModel):
@@ -168,6 +184,43 @@ def _build_stack() -> list[dict[str, Any]]:
         if present:
             out.append({"group": label, "items": present})
     return out
+
+
+def _profile_changes(base: Ruleset, resolved: Ruleset) -> list[str]:
+    """Human-readable diff of a resolved profile vs the base ruleset. Read
+    from the actual config so the UI never overstates what a standard does."""
+    changes: list[str] = []
+    bd, rd = base.defaults, resolved.defaults
+    if rd.fail_on != bd.fail_on:
+        changes.append(f"Fails CI at {rd.fail_on} (base {bd.fail_on})")
+    if rd.aggregate_only and not bd.aggregate_only:
+        changes.append("Suppresses all row samples (aggregate only)")
+    if rd.evidence_sample_rows != bd.evidence_sample_rows:
+        changes.append(
+            f"Evidence sample rows: {rd.evidence_sample_rows} (base {bd.evidence_sample_rows})"
+        )
+    if rd.redact_pii != bd.redact_pii:
+        changes.append(f"PII redaction: {'on' if rd.redact_pii else 'off'}")
+    if rd.statement_timeout_s != bd.statement_timeout_s:
+        changes.append(
+            f"Statement timeout: {rd.statement_timeout_s}s (base {bd.statement_timeout_s}s)"
+        )
+    if rd.max_result_rows != bd.max_result_rows:
+        changes.append(f"Row cap: {rd.max_result_rows} (base {bd.max_result_rows})")
+    base_null = base.thresholds.null_rate_default
+    res_null = resolved.thresholds.null_rate_default
+    if res_null != base_null:
+        changes.append(f"Null-rate threshold: {res_null} (base {base_null})")
+    base_fresh = base.thresholds.freshness_sla_hours_default
+    res_fresh = resolved.thresholds.freshness_sla_hours_default
+    if res_fresh != base_fresh:
+        changes.append(f"Freshness SLA: {res_fresh}h (base {base_fresh}h)")
+    for cid, sev in resolved.severity_overrides.items():
+        if base.severity_overrides.get(cid) != sev:
+            changes.append(f"{cid} severity raised to {sev.value}")
+    if not changes:
+        changes.append("The team default. Balanced gate, standard thresholds.")
+    return changes
 
 
 def _maybe_explain(result: RunResult, sql_text: str | None, enabled: bool) -> None:
@@ -308,7 +361,7 @@ def create_app() -> FastAPI:
             if session is not None:
                 session.close()
         _maybe_explain(result, req.sql, req.explain)
-        _REPORTS[result.run_id] = result
+        _record(result)
         return result.model_dump(mode="json")
 
     @app.post("/api/check/tableau")
@@ -355,8 +408,31 @@ def create_app() -> FastAPI:
                 run_id=str(uuid.uuid4()),
             )
         )
-        _REPORTS[result.run_id] = result
+        _record(result)
         return result.model_dump(mode="json")
+
+    @app.get("/api/history")
+    def history() -> dict[str, Any]:
+        """Recent runs, most recent first, for the confidence-over-time view."""
+        return {"runs": _HISTORY}
+
+    @app.get("/api/run/{run_id}")
+    def run_detail(run_id: str) -> dict[str, Any]:
+        result = _REPORTS.get(run_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="no run with that id")
+        return result.model_dump(mode="json")
+
+    @app.get("/api/profile")
+    def profile_detail(name: str) -> dict[str, Any]:
+        """What a standard (profile) actually changes vs the base ruleset,
+        computed from the YAML so the UI tells the truth."""
+        profile_path = PROFILES_DIR / f"{name}.yml"
+        if not profile_path.exists():
+            raise HTTPException(status_code=400, detail=f"unknown standard: {name}")
+        base = load_ruleset(DEFAULT_RULES, enforce_pin=False)
+        resolved = resolve_profile(base, load_profile(profile_path))
+        return {"name": name, "changes": _profile_changes(base, resolved)}
 
     @app.get("/api/report/{run_id}.html", response_class=HTMLResponse)
     def report_html(run_id: str) -> HTMLResponse:
