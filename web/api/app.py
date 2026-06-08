@@ -30,12 +30,13 @@ from plumb.config.loader import (
     load_ruleset,
     resolve_profile,
 )
-from plumb.config.models import Ruleset
+from plumb.config.models import CheckSpec, Ruleset
 from plumb.connect.snowflake import (
     AuthConfigError,
     SnowflakeConnectError,
     SnowflakeSession,
 )
+from plumb.engine.catalog import catalog as check_catalog
 from plumb.engine.models import RunResult, Target
 from plumb.engine.runner import RunRequest, run_checks
 from plumb.report.html import render_html
@@ -50,6 +51,12 @@ SPA_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 _REPORTS: dict[str, RunResult] = {}
 
 
+class CheckConfig(BaseModel):
+    id: str
+    enabled: bool = True
+    params: dict[str, Any] = {}
+
+
 class SqlCheckRequest(BaseModel):
     sql: str
     profile: str | None = None
@@ -57,6 +64,7 @@ class SqlCheckRequest(BaseModel):
     static_only: bool = True
     baseline: str | None = None
     explain: bool = False
+    checks: list[CheckConfig] | None = None
 
 
 def _ruleset_path(name: str | None) -> Path:
@@ -122,6 +130,23 @@ def create_app() -> FastAPI:
         names = sorted(p.stem for p in rules_dir.glob("*.yml")) if rules_dir.exists() else []
         return {"default": "plumb", "rulesets": names}
 
+    @app.get("/api/checks")
+    def checks() -> dict[str, Any]:
+        """The full catalog of registered checks with UI metadata. Lets the
+        client render configurable toggles and per-check inputs."""
+        return {"checks": check_catalog()}
+
+    @app.get("/api/ruleset")
+    def ruleset_detail(name: str = "plumb") -> dict[str, Any]:
+        """A ruleset's configured check specs, to seed the config panel."""
+        rs = load_ruleset(_ruleset_path(name), enforce_pin=False)
+        return {
+            "version": rs.version,
+            "checks": [
+                {"id": c.id, "enabled": c.enabled, "params": c.params} for c in rs.checks
+            ],
+        }
+
     @app.get("/api/connection")
     def connection() -> dict[str, Any]:
         """Report whether a live Snowflake connection is configured, so the
@@ -143,6 +168,17 @@ def create_app() -> FastAPI:
         if not req.sql.strip():
             raise HTTPException(status_code=400, detail="sql is required")
         ruleset = _resolve_ruleset(req.profile, req.rules)
+        if req.checks is not None:
+            # The UI sent an explicit check configuration; it replaces the
+            # ruleset's check list (defaults, naming, sources still apply).
+            ruleset = ruleset.model_copy(
+                update={
+                    "checks": [
+                        CheckSpec(id=c.id, enabled=c.enabled, params=c.params)
+                        for c in req.checks
+                    ]
+                }
+            )
         run_id = str(uuid.uuid4())
         session = None
         if not req.static_only:

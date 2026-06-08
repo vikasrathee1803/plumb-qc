@@ -65,6 +65,54 @@ def test_customer_ltv_check_set_enables_data_assertions():
     assert "D-GRAIN-001" in ids and "D-RECON-001" in ids
 
 
+def test_checks_catalog_lists_registered_checks_with_params():
+    r = client.get("/api/checks")
+    assert r.status_code == 200
+    checks = r.json()["checks"]
+    by_id = {c["id"]: c for c in checks}
+    assert "D-GRAIN-001" in by_id
+    assert by_id["D-GRAIN-001"]["family"] == "assertions"
+    # parametrized checks expose their param hints
+    grain_params = {p["name"] for p in by_id["D-GRAIN-001"]["params"]}
+    assert "key" in grain_params
+    # the new checks are in the catalog
+    assert "D-POS-001" in by_id and "S-STAT-011" in by_id
+
+
+def test_configurable_checks_override_what_runs():
+    """The UI can send an explicit check set; only those run."""
+    r = client.post(
+        "/api/check/sql",
+        json={
+            "sql": "SELECT a FROM t, u",
+            "static_only": True,
+            "checks": [
+                {"id": "S-STAT-001", "enabled": True},
+                {"id": "S-STAT-002", "enabled": False},
+            ],
+        },
+    )
+    assert r.status_code == 200
+    ids = [c["id"] for c in r.json()["checks"]]
+    assert "S-STAT-001" in ids
+    assert "S-STAT-002" not in ids  # disabled by the client
+
+
+def test_configurable_check_params_flow_through():
+    r = client.post(
+        "/api/check/sql",
+        json={
+            "sql": "SELECT order_id FROM t",
+            "static_only": True,
+            "checks": [{"id": "D-GRAIN-001", "enabled": True, "params": {"key": ["order_id"]}}],
+        },
+    )
+    assert r.status_code == 200
+    grain = next(c for c in r.json()["checks"] if c["id"] == "D-GRAIN-001")
+    # static-only: no session, so it skips, but the check was selected and ran
+    assert grain["status"] == "SKIP"
+
+
 def test_sql_static_only_cartesian_join_is_blocked():
     r = client.post(
         "/api/check/sql",
