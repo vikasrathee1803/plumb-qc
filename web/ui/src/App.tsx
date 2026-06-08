@@ -199,7 +199,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
 
       <RecentRuns runs={history} onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
 
-      {result ? <Report result={result} />
+      {result ? <Report result={result} onSelectRun={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
         : <div className="empty">Ready when you are. Press <kbd>⌘↵</kbd> to run, or open Customize.</div>}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title="Customize checks">
@@ -271,7 +271,7 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
 
       <RecentRuns runs={history} onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
 
-      {result ? <Report result={result} />
+      {result ? <Report result={result} onSelectRun={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
         : <div className="empty">Upload a workbook to run the Tableau checks.</div>}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title="Customize checks">

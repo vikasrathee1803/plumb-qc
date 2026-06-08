@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BuildTrend } from "./Trend";
 import type { CheckResult, RunResult } from "./types";
 
 const VERDICT_LABEL: Record<string, string> = {
@@ -91,7 +92,9 @@ function Actions({ result }: { result: RunResult }) {
   );
 }
 
-export function Report({ result }: { result: RunResult }) {
+export function Report({ result, onSelectRun }: {
+  result: RunResult; onSelectRun?: (id: string) => void;
+}) {
   const s = result.summary;
   const cov = result.coverage;
   const gaps = [
@@ -110,6 +113,8 @@ export function Report({ result }: { result: RunResult }) {
       </div>
 
       <Actions result={result} />
+
+      <BuildTrend key={result.run_id} target={result.target.name} onSelect={onSelectRun} />
 
       <div className="statstrip">
         <Stat cls="pass" n={s.passed} l="passed" />

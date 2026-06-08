@@ -51,30 +51,61 @@ SPA_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 # self-contained HTML for the run it just executed. _HISTORY is the ordered
 # index (most recent first) for the recent-runs view.
 _REPORTS: dict[str, RunResult] = {}
-_HISTORY: list[dict[str, Any]] = []
-_HISTORY_CAP = 25
-# Reports are also written here so a shared report link survives a restart.
+_HISTORY: list[dict[str, Any]] = []  # most recent first
+_HISTORY_MEM_CAP = 1000
+# Reports and the run log are written here so shared links and trends
+# survive a restart and accumulate over time.
 WEB_REPORTS_DIR = PLUMB_HOME / "reports" / "web"
+HISTORY_FILE = WEB_REPORTS_DIR / "history.jsonl"
 
 
-def _record(result: RunResult) -> None:
-    _REPORTS[result.run_id] = result
-    try:
-        WEB_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        (WEB_REPORTS_DIR / f"{result.run_id}.html").write_text(
-            render_html(result), encoding="utf-8"
-        )
-    except OSError:
-        pass  # an unwritable reports dir must never break a run
-    _HISTORY.insert(0, {
+def _history_entry(result: RunResult) -> dict[str, Any]:
+    s = result.summary
+    return {
         "run_id": result.run_id,
         "verdict": result.verdict.value,
         "target": result.target.name,
         "type": result.target.type,
         "timestamp": result.timestamp.isoformat(),
         "checks": len(result.checks),
-    })
-    del _HISTORY[_HISTORY_CAP:]
+        "passed": s.passed,
+        "failed": s.blocker + s.high + s.medium + s.low,
+    }
+
+
+def _load_history() -> None:
+    if not HISTORY_FILE.exists():
+        return
+    import json
+
+    entries: list[dict[str, Any]] = []
+    for line in HISTORY_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            continue
+    _HISTORY[:] = list(reversed(entries))[:_HISTORY_MEM_CAP]
+
+
+def _record(result: RunResult) -> None:
+    import json
+
+    _REPORTS[result.run_id] = result
+    entry = _history_entry(result)
+    try:
+        WEB_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        (WEB_REPORTS_DIR / f"{result.run_id}.html").write_text(
+            render_html(result), encoding="utf-8"
+        )
+        with HISTORY_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass  # an unwritable reports dir must never break a run
+    _HISTORY.insert(0, entry)
+    del _HISTORY[_HISTORY_MEM_CAP:]
 
 
 class CheckConfig(BaseModel):
@@ -438,7 +469,23 @@ def create_app() -> FastAPI:
     @app.get("/api/history")
     def history() -> dict[str, Any]:
         """Recent runs, most recent first, for the confidence-over-time view."""
-        return {"runs": _HISTORY}
+        return {"runs": _HISTORY[:25]}
+
+    @app.get("/api/trend")
+    def trend(target: str) -> dict[str, Any]:
+        """The verdict history for one build, oldest to newest, so the UI can
+        show whether it has been getting better or worse."""
+        for_target = [h for h in _HISTORY if h["target"] == target]
+        points = list(reversed(for_target))[-20:]  # oldest to newest
+        ready_or_better = sum(
+            1 for p in points if p["verdict"] in ("READY", "READY_WITH_NOTES")
+        )
+        return {
+            "target": target,
+            "points": points,
+            "total": len(for_target),
+            "ready_or_better": ready_or_better,
+        }
 
     @app.get("/api/run/{run_id}")
     def run_detail(run_id: str) -> dict[str, Any]:
@@ -485,4 +532,5 @@ def create_app() -> FastAPI:
     return app
 
 
+_load_history()
 app = create_app()

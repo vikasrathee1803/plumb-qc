@@ -90,3 +90,18 @@ export interface HistoryRun {
   timestamp: string;
   checks: number;
 }
+
+export interface TrendPoint {
+  run_id: string;
+  verdict: string;
+  timestamp: string;
+  passed: number;
+  failed: number;
+}
+
+export interface Trend {
+  target: string;
+  points: TrendPoint[];
+  total: number;
+  ready_or_better: number;
+}

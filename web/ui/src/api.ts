@@ -1,4 +1,6 @@
-import type { About, CatalogCheck, CheckState, Connection, HistoryRun, RunResult } from "./types";
+import type {
+  About, CatalogCheck, CheckState, Connection, HistoryRun, RunResult, Trend,
+} from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url);
@@ -20,6 +22,8 @@ export const fetchProfileChanges = (name: string) =>
   getJSON<{ name: string; changes: string[] }>(`/api/profile?name=${encodeURIComponent(name)}`);
 export const fetchHistory = () => getJSON<{ runs: HistoryRun[] }>("/api/history");
 export const fetchRun = (id: string) => getJSON<RunResult>(`/api/run/${id}`);
+export const fetchTrend = (target: string) =>
+  getJSON<Trend>(`/api/trend?target=${encodeURIComponent(target)}`);
 
 export async function runSql(body: {
   sql: string;

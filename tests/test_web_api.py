@@ -78,6 +78,21 @@ def test_run_detail_unknown_is_404():
     assert client.get("/api/run/nope").status_code == 404
 
 
+def test_trend_accumulates_per_target():
+    # A unique table name makes a unique, isolatable build target.
+    sql = "SELECT a FROM trend_probe_tbl, u"  # cartesian -> BLOCKED
+    for _ in range(3):
+        client.post("/api/check/sql", json={"sql": sql, "static_only": True})
+    tr = client.get("/api/trend?target=trend_probe_tbl").json()
+    assert tr["target"] == "trend_probe_tbl"
+    assert len(tr["points"]) >= 3
+    assert all(p["verdict"] == "BLOCKED" for p in tr["points"])
+    assert tr["ready_or_better"] == 0
+    # points are oldest to newest
+    times = [p["timestamp"] for p in tr["points"]]
+    assert times == sorted(times)
+
+
 def test_connection_endpoint_reports_configuration():
     r = client.get("/api/connection")
     assert r.status_code == 200
