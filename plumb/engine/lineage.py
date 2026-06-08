@@ -37,6 +37,13 @@ class LineageNode(BaseModel):
     filters: list[str] = Field(default_factory=list)
 
 
+class ColumnLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    from_col: str  # column in the source relation
+    to_col: str  # column it becomes in the consuming scope
+
+
 class LineageEdge(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -45,6 +52,8 @@ class LineageEdge(BaseModel):
     relation: str = "from"  # "from", "inner join", "left join", "cross", ...
     on: str | None = None
     risk: bool = False
+    # Column-level lineage: which source columns feed which output columns.
+    columns: list[ColumnLink] = Field(default_factory=list)
 
 
 class LineageGraph(BaseModel):
@@ -126,17 +135,52 @@ class _Builder:
         for join in select.args.get("joins", []):
             relations.append((join.this, join))
 
+        alias_to_rid: dict[str, str] = {}
+        edge_for_rid: dict[str, LineageEdge] = {}
+        source_rids: list[str] = []
         for rel, join in relations:
             rid = self.relation_node(rel)
             if rid == consumer_id:
                 continue  # recursive CTE self-reference; skip the self-loop
             relation, on, risk = self._edge_meta(join)
-            self.edges.append(
-                LineageEdge(source=rid, target=consumer_id, relation=relation, on=on, risk=risk)
-            )
+            edge = LineageEdge(source=rid, target=consumer_id, relation=relation, on=on, risk=risk)
+            self.edges.append(edge)
+            edge_for_rid.setdefault(rid, edge)
+            source_rids.append(rid)
+            alias = (rel.alias or (rel.name if isinstance(rel, exp.Table) else "")).lower()
+            if alias:
+                alias_to_rid[alias] = rid
+            if isinstance(rel, exp.Table) and rel.name:
+                alias_to_rid.setdefault(rel.name.lower(), rid)
             if risk:
                 label = self.nodes[rid].label
                 self.risks.append(f"{relation} on {label} has no join condition (fan-out risk)")
+
+        self._link_columns(select, alias_to_rid, source_rids, edge_for_rid)
+
+    def _link_columns(
+        self,
+        select: exp.Select,
+        alias_to_rid: dict[str, str],
+        source_rids: list[str],
+        edge_for_rid: dict[str, LineageEdge],
+    ) -> None:
+        """Trace each projected column to the source columns it derives from,
+        recording the link on the edge from that source. Unqualified columns
+        resolve to the only source when the scope reads exactly one."""
+        single = source_rids[0] if len(source_rids) == 1 else None
+        for proj in select.expressions:
+            out_name = _projection_name(proj)
+            if out_name == "*":
+                continue
+            for col in proj.find_all(exp.Column):
+                rid = alias_to_rid.get(col.table.lower()) if col.table else single
+                edge = edge_for_rid.get(rid) if rid else None
+                if edge is None:
+                    continue
+                link = ColumnLink(from_col=col.name, to_col=out_name)
+                if link not in edge.columns:
+                    edge.columns.append(link)
 
     def annotate_scope(self, select: exp.Select, consumer_id: str) -> None:
         """Record the columns this scope projects, which of them are
@@ -228,6 +272,15 @@ def build_lineage(sql: str) -> LineageGraph:
 
     builder.node("output", label="result", kind="output")
     builder.process_query(tree, "output")
+
+    # Source relations (tables, inline values) have no projection list of their
+    # own, so give them the columns that downstream scopes actually read.
+    for edge in builder.edges:
+        src = builder.nodes.get(edge.source)
+        if src is not None and src.kind in ("table", "values"):
+            for link in edge.columns:
+                if link.from_col not in src.columns:
+                    src.columns.append(link.from_col)
 
     # de-duplicate the risk summary, keep order
     seen: set[str] = set()

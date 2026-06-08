@@ -148,8 +148,43 @@ def test_cte_scope_is_annotated():
     assert cte.calculations == ["ax = AVG(x)"]
 
 
+def _links(edge):
+    return {(c.from_col, c.to_col) for c in edge.columns}
+
+
+def test_column_links_within_a_scope():
+    g = build_lineage("SELECT o.id, SUM(o.amount) AS total FROM orders o")
+    e = next(e for e in g.edges if e.target == "output")
+    assert ("id", "id") in _links(e)
+    assert ("amount", "total") in _links(e)
+
+
+def test_column_links_resolve_qualified_join_columns():
+    sql = "SELECT a.x AS ax, b.y AS by FROM ta a JOIN tb b ON a.k = b.k"
+    g = build_lineage(sql)
+    ea = next(e for e in g.edges if e.source == "table:ta")
+    eb = next(e for e in g.edges if e.source == "table:tb")
+    assert ("x", "ax") in _links(ea)
+    assert ("y", "by") in _links(eb)
+
+
+def test_column_links_chain_across_a_cte():
+    sql = (
+        "WITH c AS (SELECT id, SUM(rev) AS r FROM raw GROUP BY id) "
+        "SELECT c.id, c.r AS revenue FROM c"
+    )
+    g = build_lineage(sql)
+    raw_to_c = next(e for e in g.edges if e.source == "table:raw")
+    c_to_out = next(e for e in g.edges if e.source == "cte:c" and e.target == "output")
+    assert ("rev", "r") in _links(raw_to_c)  # source -> CTE
+    assert ("r", "revenue") in _links(c_to_out)  # CTE -> result
+    # the source table now carries the column it actually feeds
+    assert "rev" in _by_id(g)["table:raw"].columns
+
+
 def test_graph_serializes_to_contract():
     g = build_lineage("SELECT a FROM t JOIN u ON t.id = u.id")
     dumped = g.model_dump(mode="json")
     assert "nodes" in dumped and "edges" in dumped and "risks" in dumped
     assert "columns" in dumped["nodes"][0]
+    assert "columns" in dumped["edges"][0]

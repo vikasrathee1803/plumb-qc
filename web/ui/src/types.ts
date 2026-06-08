@@ -117,12 +117,18 @@ export interface LineageNode {
   filters: string[];
 }
 
+export interface ColumnLink {
+  from_col: string;
+  to_col: string;
+}
+
 export interface LineageEdge {
   source: string;
   target: string;
   relation: string;
   on: string | null;
   risk: boolean;
+  columns: ColumnLink[];
 }
 
 export interface LineageGraph {

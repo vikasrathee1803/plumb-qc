@@ -393,6 +393,10 @@ table.ev th { color: var(--fg-4); } table.ev td { font-family: ui-monospace, Men
 .map-risks { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 26px 0; }
 .map-risk { font-size: 12px; color: var(--neg); background: var(--neg-soft); border: 1px solid color-mix(in srgb, var(--neg) 30%, transparent);
   padding: 6px 12px; border-radius: 999px; }
+.coltoggle { font-size: 12.5px; font-weight: 560; color: var(--fg-2); background: var(--bg-3);
+  border: 1px solid var(--line-1); border-radius: 10px; padding: 7px 14px; transition: all 0.12s; }
+.coltoggle:hover { color: var(--fg-1); border-color: var(--line-2); }
+.coltoggle.on { color: var(--ai-2); background: var(--ai-soft); border-color: var(--ai-edge); }
 .zoom { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-3); border: 1px solid var(--line-1);
   border-radius: 10px; padding: 3px; }
 .zbtn { border: 0; background: transparent; color: var(--fg-2); width: 30px; height: 28px; border-radius: 7px; font-size: 15px; }
@@ -449,6 +453,21 @@ table.ev th { color: var(--fg-4); } table.ev td { font-family: ui-monospace, Men
 .map-svg .nbadge { font-size: 9.5px; fill: var(--fg-3); font-family: ui-monospace, Menlo, monospace; pointer-events: none; }
 .map-svg .nflag { fill: var(--warn); }
 @keyframes nodein { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: none; } }
+
+/* Column-thread mode */
+.map-svg .thread { fill: none; stroke: var(--ai-2); stroke-width: 1.3; opacity: 0.4;
+  stroke-dasharray: 2 14; animation: flow 1.6s linear infinite; transition: opacity 0.15s, stroke-width 0.15s; }
+.map-svg .thread.risk { stroke: var(--neg); }
+.map-svg .thread.hot { opacity: 1; stroke-width: 2.4; stroke-dasharray: none; }
+.map-svg .thread.dim { opacity: 0.07; }
+.map-svg .cnode .crow { cursor: pointer; }
+.map-svg .cnode .crow-hit { fill: transparent; }
+.map-svg .cnode .crow:hover .crow-hit { fill: var(--ai-soft); }
+.map-svg .cnode .cdot { fill: var(--fg-4); }
+.map-svg .cnode .ctext { font-size: 11.5px; fill: var(--fg-3); font-family: ui-monospace, Menlo, monospace; }
+.map-svg .cnode .crow.on .ctext { fill: var(--fg-1); font-weight: 600; }
+.map-svg .cnode .crow.on .cdot { fill: var(--ai-2); }
+.map-svg .cnode .crow.dim { opacity: 0.3; }
 
 /* Rich hover tooltip */
 .maptip { position: fixed; z-index: 70; pointer-events: none; max-width: 280px;
