@@ -33,3 +33,33 @@ export interface RunResult {
   checks: CheckResult[];
   environment: { warehouse: string | null; role: string | null; query_tag: string | null };
 }
+
+export interface ParamHint {
+  name: string;
+  type: "list" | "str" | "int" | "float" | "bool" | "sql";
+  required?: boolean;
+}
+
+export interface CatalogCheck {
+  id: string;
+  name: string;
+  family: string;
+  default_severity: string;
+  execution_type: string;
+  description: string;
+  params: ParamHint[];
+}
+
+export interface Connection {
+  configured: boolean;
+  account?: string;
+  warehouse?: string;
+  role?: string;
+}
+
+// One configurable check in the UI: enabled flag plus param values keyed by name.
+export interface CheckState {
+  id: string;
+  enabled: boolean;
+  params: Record<string, unknown>;
+}
