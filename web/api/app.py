@@ -223,6 +223,20 @@ def _profile_changes(base: Ruleset, resolved: Ruleset) -> list[str]:
     return changes
 
 
+def _sql_target_name(sql: str) -> str:
+    """A friendly name for a SQL build: its primary source table, else a
+    generic label. Used in the verdict and the recent-runs strip."""
+    try:
+        from plumb.checks._sql import extract_table_refs
+
+        refs = extract_table_refs(sql)
+        if refs:
+            return refs[0].name
+    except Exception:  # noqa: BLE001
+        pass
+    return "SQL build"
+
+
 def _maybe_explain(result: RunResult, sql_text: str | None, enabled: bool) -> None:
     if not enabled:
         return
@@ -347,7 +361,7 @@ def create_app() -> FastAPI:
         try:
             result = run_checks(
                 RunRequest(
-                    target=Target(type="sql", name="web_sql", source_ref=None),
+                    target=Target(type="sql", name=_sql_target_name(req.sql), source_ref=None),
                     ruleset=ruleset,
                     sql_text=req.sql,
                     profile=req.profile,
