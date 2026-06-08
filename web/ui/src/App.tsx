@@ -15,7 +15,8 @@ const SAMPLE_SQL =
   "SELECT customer_id, segment, region, lifetime_revenue, last_order_date\n" +
   "FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV";
 
-// A complex multi-CTE build over the real demo views, with a comma join that
+// A complex multi-layer build over the real demo views: stacked CTEs, a ratio
+// and a CASE calculation, a scalar subquery benchmark, and a comma join that
 // fans out. Loads a rich map and a real S-STAT-002 cross-join finding.
 const DEMO_COMPLEX_SQL = `WITH regional_orders AS (
     SELECT customer_region, customer_segment,
@@ -30,6 +31,14 @@ customer_value AS (
     WHERE lifetime_revenue > 0
     GROUP BY region, segment
 ),
+combined AS (
+    SELECT ro.customer_region, ro.customer_segment, ro.region_revenue,
+           cv.ltv, cv.customers,
+           ro.region_revenue / NULLIF(cv.customers, 0) AS revenue_per_customer
+    FROM regional_orders ro
+    JOIN customer_value cv
+      ON ro.customer_region = cv.region AND ro.customer_segment = cv.segment
+),
 supplier_health AS (
     SELECT supplier_region, AVG(late_delivery_pct) AS avg_late
     FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_SUPPLIER_PERFORMANCE
@@ -40,11 +49,13 @@ brand_margin AS (
     FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_PRODUCT_MARGIN
     GROUP BY supplier_nation
 )
-SELECT ro.customer_region, ro.customer_segment, ro.region_revenue,
-       cv.ltv, cv.customers, sh.avg_late, bm.margin
-FROM regional_orders ro
-JOIN customer_value cv ON ro.customer_region = cv.region AND ro.customer_segment = cv.segment
-LEFT JOIN supplier_health sh ON ro.customer_region = sh.supplier_region,
+SELECT c.customer_region, c.customer_segment, c.region_revenue, c.ltv,
+       c.revenue_per_customer, sh.avg_late,
+       CASE WHEN c.region_revenue > 40000000000 THEN 'high' ELSE 'standard' END AS revenue_tier,
+       (SELECT AVG(lifetime_revenue) FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV) AS ltv_benchmark,
+       bm.margin
+FROM combined c
+LEFT JOIN supplier_health sh ON c.customer_region = sh.supplier_region,
      brand_margin bm`;
 
 interface Preset { id: string; label: string; rules: string; mode?: "all" | "static"; }

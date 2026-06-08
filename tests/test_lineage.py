@@ -210,10 +210,29 @@ def test_nested_with_inside_a_subquery_is_mapped():
 def test_scalar_subquery_columns_do_not_leak_into_outer_scope():
     sql = "SELECT b.id, (SELECT MAX(k) FROM other) AS mx FROM b"
     g = build_lineage(sql)
-    out_edge = next(e for e in g.edges if e.target == "output")
+    base_edge = next(e for e in g.edges if e.source == "table:b" and e.target == "output")
     # k belongs to the scalar subquery, not to b; it must not be attributed here
-    assert ("k", "mx") not in _links(out_edge)
-    assert ("id", "id") in _links(out_edge)
+    assert ("k", "mx") not in _links(base_edge)
+    assert ("id", "id") in _links(base_edge)
+
+
+def test_scalar_subquery_in_projection_becomes_a_node():
+    g = build_lineage("SELECT b.id, (SELECT MAX(k) FROM other) AS mx FROM base b")
+    nodes = _by_id(g)
+    assert "table:other" in nodes
+    sub = next(n for n in g.nodes if n.kind == "subquery")
+    # other.k -> subquery -> result.mx, the full path through the scalar subquery
+    assert any(e.source == "table:other" and e.target == sub.id for e in g.edges)
+    out_edge = next(e for e in g.edges if e.source == sub.id and e.target == "output")
+    assert out_edge.relation == "scalar"
+    assert any(link.to_col == "mx" for link in out_edge.columns)
+
+
+def test_predicate_subquery_becomes_a_filter_node():
+    g = build_lineage("SELECT id FROM base WHERE id IN (SELECT id FROM allow)")
+    assert "table:allow" in _by_id(g)
+    assert any(e.relation == "filter" for e in g.edges)
+    assert any(e.source == "table:allow" for e in g.edges)
 
 
 def test_graph_serializes_to_contract():

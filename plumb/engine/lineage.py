@@ -94,15 +94,29 @@ class _Builder:
             fqn = ".".join(p for p in (rel.catalog, rel.db, rel.name) if p)
             return self.node(f"table:{fqn.lower()}", label=name, kind="table", detail=fqn)
         if isinstance(rel, exp.Subquery):
-            self._sub += 1
-            sid = f"sub:{self._sub}"
-            self.node(sid, label=rel.alias or "subquery", kind="subquery")
+            sid = self._new_subquery(rel.alias or "subquery")
             self.process_query(rel.this, sid)
             return sid
         # values, table functions, etc.
         self._sub += 1
         gid = f"expr:{self._sub}"
         return self.node(gid, label=type(rel).__name__.lower(), kind="values")
+
+    def _new_subquery(self, label: str) -> str:
+        self._sub += 1
+        sid = f"sub:{self._sub}"
+        self.node(sid, label=label or "subquery", kind="subquery")
+        return sid
+
+    def _first_output_col(self, sub: exp.Subquery) -> str | None:
+        inner: exp.Expression = sub.this
+        while isinstance(inner, exp.Subquery):
+            inner = inner.this
+        if isinstance(inner, exp.SetOperation):
+            inner = inner.this
+        if isinstance(inner, exp.Select) and inner.expressions:
+            return _projection_name(inner.expressions[0])
+        return None
 
     def process_query(self, expr: exp.Expression, consumer_id: str) -> None:
         """Feed a query body (a SELECT, a set operation, or a parenthesized
@@ -170,6 +184,30 @@ class _Builder:
                 self.risks.append(f"{relation} on {label} has no join condition (fan-out risk)")
 
         self._link_columns(select, alias_to_rid, source_rids, edge_for_rid)
+        self._expand_subqueries(select, consumer_id)
+
+    def _expand_subqueries(self, select: exp.Select, consumer_id: str) -> None:
+        """Scalar subqueries in the SELECT list and predicate subqueries in
+        WHERE/HAVING become their own nodes feeding this scope. A scalar
+        subquery links its output column to the column it produces."""
+        for proj in select.expressions:
+            out_name = _projection_name(proj)
+            for sub in _subqueries_at_level(proj):
+                sid = self._new_subquery(sub.alias or out_name)
+                self.process_query(sub.this, sid)
+                edge = LineageEdge(source=sid, target=consumer_id, relation="scalar")
+                sub_col = self._first_output_col(sub)
+                if sub_col and out_name != "*":
+                    edge.columns.append(ColumnLink(from_col=sub_col, to_col=out_name))
+                self.edges.append(edge)
+        for clause in ("where", "having", "qualify"):
+            node = select.args.get(clause)
+            if node is None or node.this is None:
+                continue
+            for sub in _subqueries_at_level(node.this):
+                sid = self._new_subquery(sub.alias or "filter")
+                self.process_query(sub.this, sid)
+                self.edges.append(LineageEdge(source=sid, target=consumer_id, relation="filter"))
 
     def _link_columns(
         self,
@@ -238,6 +276,14 @@ def _short(text: str, limit: int = 80) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
+def _iter_children(node: exp.Expression) -> list[exp.Expression]:
+    children: list[exp.Expression] = []
+    for value in node.args.values():
+        items = value if isinstance(value, list) else [value]
+        children.extend(i for i in items if isinstance(i, exp.Expression))
+    return children
+
+
 def _columns_at_level(root: exp.Expression) -> list[exp.Column]:
     """Columns referenced directly in a projection, not descending into nested
     subqueries (a scalar subquery's columns belong to its own scope, not this
@@ -249,14 +295,25 @@ def _columns_at_level(root: exp.Expression) -> list[exp.Column]:
         if isinstance(node, exp.Column):
             cols.append(node)
             continue
-        for value in node.args.values():
-            items = value if isinstance(value, list) else [value]
-            for item in items:
-                if isinstance(item, exp.Expression) and not isinstance(
-                    item, (exp.Subquery, exp.Select)
-                ):
-                    stack.append(item)
+        for child in _iter_children(node):
+            if not isinstance(child, (exp.Subquery, exp.Select)):
+                stack.append(child)
     return cols
+
+
+def _subqueries_at_level(root: exp.Expression) -> list[exp.Subquery]:
+    """The outermost subqueries within an expression: each is recorded without
+    descending into it (its internals belong to its own scope and are processed
+    separately). Used to expand scalar and predicate subqueries into nodes."""
+    subs: list[exp.Subquery] = []
+    stack: list[exp.Expression] = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, exp.Subquery):
+            subs.append(node)
+            continue
+        stack.extend(_iter_children(node))
+    return subs
 
 
 def _projection_name(proj: exp.Expression) -> str:
