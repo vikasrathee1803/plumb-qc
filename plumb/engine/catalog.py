@@ -93,6 +93,9 @@ def catalog() -> list[dict[str, Any]]:
     """Every registered check with UI metadata, sorted by family then id."""
     out: list[dict[str, Any]] = []
     for d in all_checks():
+        # Custom assertions are authored in a dedicated UI, not toggled here.
+        if d.check_id.startswith("D-CUSTOM"):
+            continue
         out.append(
             {
                 "id": d.check_id,
