@@ -15,6 +15,38 @@ const SAMPLE_SQL =
   "SELECT customer_id, segment, region, lifetime_revenue, last_order_date\n" +
   "FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV";
 
+// A complex multi-CTE build over the real demo views, with a comma join that
+// fans out. Loads a rich map and a real S-STAT-002 cross-join finding.
+const DEMO_COMPLEX_SQL = `WITH regional_orders AS (
+    SELECT customer_region, customer_segment,
+           SUM(total_revenue) AS region_revenue, SUM(order_count) AS orders
+    FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_ORDER_ANALYTICS
+    WHERE total_revenue > 0
+    GROUP BY customer_region, customer_segment
+),
+customer_value AS (
+    SELECT region, segment, COUNT(*) AS customers, SUM(lifetime_revenue) AS ltv
+    FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV
+    WHERE lifetime_revenue > 0
+    GROUP BY region, segment
+),
+supplier_health AS (
+    SELECT supplier_region, AVG(late_delivery_pct) AS avg_late
+    FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_SUPPLIER_PERFORMANCE
+    GROUP BY supplier_region
+),
+brand_margin AS (
+    SELECT supplier_nation, SUM(gross_margin) AS margin
+    FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_PRODUCT_MARGIN
+    GROUP BY supplier_nation
+)
+SELECT ro.customer_region, ro.customer_segment, ro.region_revenue,
+       cv.ltv, cv.customers, sh.avg_late, bm.margin
+FROM regional_orders ro
+JOIN customer_value cv ON ro.customer_region = cv.region AND ro.customer_segment = cv.segment
+LEFT JOIN supplier_health sh ON ro.customer_region = sh.supplier_region,
+     brand_margin bm`;
+
 interface Preset { id: string; label: string; rules: string; mode?: "all" | "static"; }
 const PRESETS: Preset[] = [
   { id: "recommended", label: "Recommended", rules: "plumb" },
@@ -185,7 +217,12 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
     <>
       <div className="panel">
         <label className="field">
-          <span className="lab">Your SQL build</span>
+          <span className="lab">
+            Your SQL build
+            <button className="lab-link" onClick={() => setSql(DEMO_COMPLEX_SQL)}>
+              Load complex example
+            </button>
+          </span>
           <textarea value={sql} rows={6} spellCheck={false} onChange={(e) => setSql(e.target.value)} />
         </label>
         <div className="setup">
@@ -226,7 +263,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
         <CustomChecksEditor checks={custom} setChecks={setCustom} />
       </Drawer>
 
-      <LineageMap open={mapOpen} onClose={() => setMapOpen(false)} sql={sql} />
+      <LineageMap open={mapOpen} onClose={() => setMapOpen(false)} sql={sql} result={result} />
     </>
   );
 }

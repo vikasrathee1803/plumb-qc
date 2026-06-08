@@ -73,7 +73,10 @@ button:active:not(:disabled) { transform: scale(0.985); }
 .seg button.on { background: var(--bg-1); color: var(--fg-1); box-shadow: var(--shadow-2); }
 
 label.field { display: block; }
-.field .lab { font-size: 12.5px; color: var(--fg-3); margin: 16px 0 7px; font-weight: 560; }
+.field .lab { font-size: 12.5px; color: var(--fg-3); margin: 16px 0 7px; font-weight: 560;
+  display: flex; align-items: baseline; gap: 10px; }
+.lab-link { background: transparent; border: 0; color: var(--ai-2); font-size: 12px; font-weight: 560; padding: 0; cursor: pointer; }
+.lab-link:hover { text-decoration: underline; }
 textarea, input[type="text"], input[type="number"] {
   width: 100%; background: var(--bg-2); color: var(--fg-1); border: 1px solid var(--line-2);
   border-radius: 14px; padding: 13px 15px; font-size: 14px; outline: none; transition: border 0.15s, box-shadow 0.15s;
@@ -395,33 +398,68 @@ table.ev th { color: var(--fg-4); } table.ev td { font-family: ui-monospace, Men
 .zbtn { border: 0; background: transparent; color: var(--fg-2); width: 30px; height: 28px; border-radius: 7px; font-size: 15px; }
 .zbtn:hover { background: var(--bg-1); color: var(--fg-1); }
 .zbtn.zval { width: 48px; font-size: 12px; font-variant-numeric: tabular-nums; }
-.map-canvas { flex: 1; overflow: auto; padding: 26px; }
+.map-findings { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 26px 0; }
+.mf-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--fg-4); font-weight: 700; }
+.mf-card { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-2); border: 1px solid var(--line-2);
+  border-radius: 999px; padding: 5px 12px 5px 6px; cursor: pointer; transition: border 0.12s, background 0.12s; }
+.mf-card:hover { border-color: var(--line-3); }
+.mf-card.on { border-color: var(--ai-edge); background: var(--ai-soft); }
+.mf-id { font-size: 12px; color: var(--fg-2); font-weight: 600; }
+.mf-obs { font-size: 12px; color: var(--fg-4); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mf-detail { margin: 8px 26px 0; padding: 10px 14px; background: var(--ai-soft); border: 1px solid var(--ai-edge);
+  border-radius: 12px; font-size: 12.5px; color: var(--fg-1); }
+.map-canvas { flex: 1; overflow: auto; padding: 26px;
+  background-image: radial-gradient(var(--line-1) 1px, transparent 1px); background-size: 24px 24px; }
 .map-svg { display: block; }
-.map-svg .node { cursor: default; transition: opacity 0.15s; }
-.map-svg .node.dim { opacity: 0.22; }
-.map-svg .edge { transition: opacity 0.15s; }
-.map-svg .edge.dim { opacity: 0.15; }
-.map-svg .edge.hot path { stroke: var(--ai-2); stroke-width: 2.4; }
-.map-svg .edge.hot.risk path { stroke: var(--neg); }
 
-.map-svg .edge path { fill: none; stroke: var(--line-3); stroke-width: 1.6; }
-.map-svg .edge.risk path { stroke: var(--neg); stroke-dasharray: 5 4; stroke-width: 1.8; }
+/* Edges: a wide invisible hit area, the visible line, and an animated
+   "synapse" pulse flowing along it for the neural feel. */
+.map-svg .edge { transition: opacity 0.18s; }
+.map-svg .edge.clickable { cursor: pointer; }
+.map-svg .edge.dim { opacity: 0.14; }
+.map-svg .edge-hit { fill: none; stroke: transparent; stroke-width: 16; }
+.map-svg .edge-line { fill: none; stroke: var(--line-3); stroke-width: 1.6; transition: stroke 0.15s, stroke-width 0.15s; }
+.map-svg .edge.risk .edge-line { stroke: var(--neg); stroke-dasharray: 5 4; stroke-width: 1.8; }
+.map-svg .edge.hot .edge-line { stroke: var(--ai-2); stroke-width: 2.6; }
+.map-svg .edge.hot.risk .edge-line { stroke: var(--neg); }
+.map-svg .flowline { fill: none; stroke: var(--ai-2); stroke-width: 1.7; stroke-linecap: round;
+  stroke-dasharray: 2 16; opacity: 0.55; animation: flow 1.5s linear infinite; }
+.map-svg .edge.risk .flowline { stroke: var(--neg); opacity: 0.7; }
+.map-svg .edge.dim .flowline { opacity: 0.08; }
+.map-svg .edge.hot .flowline { opacity: 0.9; stroke-width: 2; }
+@keyframes flow { to { stroke-dashoffset: -18; } }
 .map-svg .arrowhead { fill: var(--line-3); }
 .map-svg .arrowhead-risk { fill: var(--neg); }
-.map-svg .edge-label { font-size: 10.5px; fill: var(--fg-4); }
+.map-svg .edge-label { font-size: 10.5px; fill: var(--fg-4); pointer-events: none; }
 .map-svg .edge.risk .edge-label { fill: var(--neg); font-weight: 600; }
 
-.map-svg .node { animation: nodein 0.35s ease backwards; }
-.map-svg .nbox { fill: var(--bg-1); stroke: var(--line-2); stroke-width: 1; filter: drop-shadow(0 6px 16px rgba(0,0,0,0.4)); }
+.map-svg .node { animation: nodein 0.4s cubic-bezier(0.22,1,0.36,1) backwards; transition: opacity 0.18s; cursor: pointer; }
+.map-svg .node.dim { opacity: 0.22; }
+.map-svg .node .nbox { fill: var(--bg-1); stroke: var(--line-2); stroke-width: 1;
+  filter: drop-shadow(0 6px 16px rgba(0,0,0,0.4)); transition: stroke 0.15s, filter 0.15s; }
+.map-svg .node:hover .nbox { stroke: var(--ai-2); filter: drop-shadow(0 0 18px var(--ai-edge)); }
+.map-svg .node.linked .nbox { stroke: var(--ai-2); stroke-width: 2; filter: drop-shadow(0 0 16px var(--ai-edge)); }
 .map-svg .nbox.k-output { stroke: color-mix(in srgb, var(--pos) 45%, var(--line-2)); }
 .map-svg .nbox.k-cte { stroke: color-mix(in srgb, var(--ai-1) 40%, var(--line-2)); }
 .map-svg .naccent.k-table { fill: var(--info); } .map-svg .naccent.k-cte { fill: var(--ai-1); }
 .map-svg .naccent.k-subquery { fill: var(--fg-4); } .map-svg .naccent.k-output { fill: var(--pos); }
 .map-svg .naccent.k-values { fill: var(--fg-4); }
-.map-svg .nkind { font-size: 10px; fill: var(--fg-4); text-transform: uppercase; letter-spacing: 0.06em; }
-.map-svg .nlabel { font-size: 13.5px; fill: var(--fg-1); font-weight: 600; font-family: ui-monospace, Menlo, monospace; }
+.map-svg .nkind { font-size: 10px; fill: var(--fg-4); text-transform: uppercase; letter-spacing: 0.06em; pointer-events: none; }
+.map-svg .nlabel { font-size: 13.5px; fill: var(--fg-1); font-weight: 600; font-family: ui-monospace, Menlo, monospace; pointer-events: none; }
+.map-svg .nbadge { font-size: 9.5px; fill: var(--fg-3); font-family: ui-monospace, Menlo, monospace; pointer-events: none; }
 .map-svg .nflag { fill: var(--warn); }
 @keyframes nodein { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: none; } }
+
+/* Rich hover tooltip */
+.maptip { position: fixed; z-index: 70; pointer-events: none; max-width: 280px;
+  background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 12px;
+  padding: 9px 12px; box-shadow: var(--shadow-3); animation: ttin 0.12s ease; }
+.maptip.risk { border-color: color-mix(in srgb, var(--neg) 45%, var(--line-2)); }
+.maptip .tt-head { font-size: 12px; font-weight: 700; color: var(--fg-1); letter-spacing: 0.02em; }
+.maptip.risk .tt-head { color: var(--neg); }
+.maptip .tt-line { font-size: 11.5px; color: var(--fg-3); margin-top: 3px; line-height: 1.4;
+  font-family: ui-monospace, Menlo, monospace; }
+@keyframes ttin { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 .caret { color: var(--fg-4); transition: transform 0.15s; font-size: 11px; }
 .caret.open { transform: rotate(90deg); }

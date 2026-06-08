@@ -30,6 +30,11 @@ class LineageNode(BaseModel):
     kind: NodeKind
     detail: str = ""
     flags: list[str] = Field(default_factory=list)
+    # Populated for query scopes (CTE, subquery, result): the shape of what
+    # the scope produces, so the map can show columns, calculations, filters.
+    columns: list[str] = Field(default_factory=list)
+    calculations: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
 
 
 class LineageEdge(BaseModel):
@@ -112,6 +117,7 @@ class _Builder:
         # SELECT * smell on the consuming scope.
         if any(isinstance(p, exp.Star) for p in select.expressions):
             self.flag(consumer_id, "SELECT *")
+        self.annotate_scope(select, consumer_id)
 
         relations: list[tuple[exp.Expression, exp.Join | None]] = []
         from_ = select.args.get("from")
@@ -131,6 +137,27 @@ class _Builder:
             if risk:
                 label = self.nodes[rid].label
                 self.risks.append(f"{relation} on {label} has no join condition (fan-out risk)")
+
+    def annotate_scope(self, select: exp.Select, consumer_id: str) -> None:
+        """Record the columns this scope projects, which of them are
+        calculations (aggregates, functions, arithmetic, CASE), and any
+        WHERE/HAVING filters it applies."""
+        node = self.nodes.get(consumer_id)
+        if node is None or node.columns:  # already annotated (first pass wins)
+            return
+        for proj in select.expressions:
+            name = _projection_name(proj)
+            node.columns.append(name)
+            inner = proj.this if isinstance(proj, exp.Alias) else proj
+            if _is_calculation(inner):
+                node.calculations.append(f"{name} = {_short(inner.sql(dialect='snowflake'), 44)}")
+        where = select.args.get("where")
+        if where is not None and where.this is not None:
+            for pred in _split_and(where.this):
+                node.filters.append(_short(pred.sql(dialect="snowflake"), 60))
+        having = select.args.get("having")
+        if having is not None and having.this is not None:
+            node.filters.append("HAVING " + _short(having.this.sql(dialect="snowflake"), 50))
 
     def _edge_meta(self, join: exp.Join | None) -> tuple[str, str | None, bool]:
         if join is None:
@@ -152,6 +179,31 @@ class _Builder:
 def _short(text: str, limit: int = 80) -> str:
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _projection_name(proj: exp.Expression) -> str:
+    if isinstance(proj, exp.Alias):
+        return proj.alias
+    if isinstance(proj, exp.Column):
+        return proj.name
+    if isinstance(proj, exp.Star):
+        return "*"
+    return _short(proj.sql(dialect="snowflake"), 24)
+
+
+def _is_calculation(expr: exp.Expression) -> bool:
+    """A projection is a calculation if it is not just a bare column, star, or
+    literal: aggregates, scalar functions, arithmetic, CASE, casts, etc."""
+    return not isinstance(expr, (exp.Column, exp.Star, exp.Literal, exp.Null))
+
+
+def _split_and(expr: exp.Expression) -> list[exp.Expression]:
+    """Flatten an AND tree into its conjuncts so each filter shows separately."""
+    if isinstance(expr, exp.And):
+        return _split_and(expr.this) + _split_and(expr.expression)
+    if isinstance(expr, exp.Paren):
+        return _split_and(expr.this)
+    return [expr]
 
 
 def build_lineage(sql: str) -> LineageGraph:

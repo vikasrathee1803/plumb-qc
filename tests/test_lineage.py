@@ -120,7 +120,36 @@ def test_recursive_cte_has_no_self_loop():
     assert not any(e.source == e.target for e in g.edges)
 
 
+def test_scope_columns_calculations_and_filters():
+    sql = (
+        "SELECT region, SUM(rev) AS total, COUNT(*) AS n "
+        "FROM t WHERE active = TRUE AND region <> 'X' "
+        "GROUP BY region HAVING SUM(rev) > 100"
+    )
+    out = _by_id(build_lineage(sql))["output"]
+    assert out.columns == ["region", "total", "n"]
+    assert "total = SUM(rev)" in out.calculations
+    assert "n = COUNT(*)" in out.calculations
+    assert "active = TRUE" in out.filters
+    assert "region <> 'X'" in out.filters
+    assert any(f.startswith("HAVING") for f in out.filters)
+
+
+def test_plain_columns_are_not_calculations():
+    out = _by_id(build_lineage("SELECT a, b, c FROM t"))["output"]
+    assert out.columns == ["a", "b", "c"]
+    assert out.calculations == []
+
+
+def test_cte_scope_is_annotated():
+    sql = "WITH c AS (SELECT id, AVG(x) AS ax FROM raw GROUP BY id) SELECT * FROM c"
+    cte = _by_id(build_lineage(sql))["cte:c"]
+    assert cte.columns == ["id", "ax"]
+    assert cte.calculations == ["ax = AVG(x)"]
+
+
 def test_graph_serializes_to_contract():
     g = build_lineage("SELECT a FROM t JOIN u ON t.id = u.id")
     dumped = g.model_dump(mode="json")
     assert "nodes" in dumped and "edges" in dumped and "risks" in dumped
+    assert "columns" in dumped["nodes"][0]

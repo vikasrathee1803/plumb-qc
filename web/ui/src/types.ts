@@ -112,6 +112,9 @@ export interface LineageNode {
   kind: "table" | "cte" | "subquery" | "output" | "values";
   detail: string;
   flags: string[];
+  columns: string[];
+  calculations: string[];
+  filters: string[];
 }
 
 export interface LineageEdge {

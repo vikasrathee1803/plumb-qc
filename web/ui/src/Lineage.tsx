@@ -1,12 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchLineage } from "./api";
 import { useEscape } from "./ui";
-import type { LineageGraph, LineageNode } from "./types";
+import type { CheckResult, LineageGraph, LineageNode, RunResult } from "./types";
 
-const NODE_W = 168;
-const NODE_H = 56;
-const X_GAP = 250;
-const Y_GAP = 92;
+// Checks whose failure has a place on the map, and where to highlight.
+const STRUCTURAL = new Set([
+  "S-STAT-001", "S-STAT-002", "S-STAT-003", "S-STAT-008", "S-STAT-010",
+  "D-GRAIN-001", "D-GRAIN-002", "D-DUP-001", "D-RECON-001", "D-DISTINCT-001",
+]);
+const OUTPUT_CHECKS = new Set([
+  "D-GRAIN-001", "D-GRAIN-002", "D-DUP-001", "D-RECON-001", "D-DISTINCT-001",
+]);
+
+function relatedTo(checkId: string, graph: LineageGraph) {
+  const edges = new Set<number>();
+  const nodes = new Set<string>();
+  graph.edges.forEach((e, i) => {
+    if (checkId === "S-STAT-002" && e.risk) edges.add(i);
+    if ((checkId === "S-STAT-010" || checkId === "S-STAT-008") && e.relation.includes("join")) edges.add(i);
+  });
+  for (const n of graph.nodes) {
+    if (checkId === "S-STAT-001" && n.flags.includes("SELECT *")) nodes.add(n.id);
+    if (OUTPUT_CHECKS.has(checkId) && n.kind === "output") nodes.add(n.id);
+  }
+  return { edges, nodes };
+}
+
+const NODE_W = 178;
+const NODE_H = 64;
+const X_GAP = 260;
+const Y_GAP = 104;
 const MARGIN = 48;
 
 const KIND_LABEL: Record<string, string> = {
@@ -63,20 +86,64 @@ function layout(graph: LineageGraph) {
   return { placed, width, height };
 }
 
-export function LineageMap({ open, onClose, sql }: {
-  open: boolean; onClose: () => void; sql: string;
+export function LineageMap({ open, onClose, sql, result }: {
+  open: boolean; onClose: () => void; sql: string; result?: RunResult | null;
 }) {
   useEscape(open, onClose);
   const [graph, setGraph] = useState<LineageGraph | null>(null);
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState(1);
   const [hover, setHover] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setGraph(null); setError(""); setZoom(1); setHover(null);
+    setGraph(null); setError(""); setZoom(1); setHover(null); setSelected(null);
     fetchLineage(sql).then(setGraph).catch((e) => setError(String(e.message ?? e)));
   }, [open, sql]);
+
+  const findings: CheckResult[] = (result?.checks ?? []).filter(
+    (c) => STRUCTURAL.has(c.id) && (c.status === "FAIL" || c.status === "ERROR" || c.status === "WARN")
+  );
+  const hasCrossFinding = findings.some((c) => c.id === "S-STAT-002");
+  const related = useMemo(
+    () => (selected && graph ? relatedTo(selected, graph) : { edges: new Set<number>(), nodes: new Set<string>() }),
+    [selected, graph]
+  );
+
+  const [tip, setTip] = useState<{ x: number; y: number; lines: string[]; risk?: boolean } | null>(null);
+  const adj = useMemo(() => {
+    const inc = new Map<string, string[]>();
+    const out = new Map<string, string[]>();
+    const lbl = new Map((graph?.nodes ?? []).map((n) => [n.id, n.label]));
+    for (const e of graph?.edges ?? []) {
+      out.set(e.source, [...(out.get(e.source) ?? []), lbl.get(e.target) ?? e.target]);
+      inc.set(e.target, [...(inc.get(e.target) ?? []), lbl.get(e.source) ?? e.source]);
+    }
+    return { inc, out };
+  }, [graph]);
+
+  function nodeTip(n: LineageNode): string[] {
+    const lines = [`${KIND_LABEL[n.kind] ?? n.kind} · ${n.detail || n.label}`];
+    const reads = adj.inc.get(n.id);
+    const feeds = adj.out.get(n.id);
+    if (reads?.length) lines.push(`reads ${reads.join(", ")}`);
+    if (feeds?.length) lines.push(`feeds ${feeds.join(", ")}`);
+    if (n.columns.length) {
+      const shown = n.columns.slice(0, 8).join(", ");
+      const more = n.columns.length > 8 ? ` +${n.columns.length - 8}` : "";
+      lines.push(`columns: ${shown}${more}`);
+    }
+    for (const c of n.calculations.slice(0, 5)) lines.push(`ƒ ${c}`);
+    for (const f of n.filters.slice(0, 4)) lines.push(`where ${f}`);
+    if (n.flags.length) lines.push(`flag: ${n.flags.join(", ")}`);
+    return lines;
+  }
+
+  function showNodeTip(n: LineageNode, e: { clientX: number; clientY: number }) {
+    if (!selected) setHover(n.id);
+    setTip({ x: e.clientX, y: e.clientY, lines: nodeTip(n), risk: n.flags.length > 0 });
+  }
 
   const lay = useMemo(() => (graph ? layout(graph) : null), [graph]);
   const canvasW = lay ? Math.max(lay.width, 640) : 640;
@@ -141,6 +208,25 @@ export function LineageMap({ open, onClose, sql }: {
         </div>
       )}
 
+      {findings.length > 0 && (
+        <div className="map-findings">
+          <span className="mf-label">Findings on this build</span>
+          {findings.map((c) => (
+            <div key={c.id} className={`mf-card s-${c.status} ${selected === c.id ? "on" : ""}`}
+              onClick={() => setSelected(selected === c.id ? null : c.id)}>
+              <span className={`statuspill s-${c.status}`}>{c.status}</span>
+              <span className="mf-id mono">{c.id}</span>
+              <span className="mf-obs">{c.observed}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {selected && findings.find((c) => c.id === selected)?.remediation && (
+        <div className="mf-detail">
+          {findings.find((c) => c.id === selected)!.remediation}
+        </div>
+      )}
+
       <div className="map-canvas">
         {error && <div className="empty">{error}</div>}
         {!graph && !error && <div className="empty">Mapping your query…</div>}
@@ -165,52 +251,91 @@ export function LineageMap({ open, onClose, sql }: {
               const dx = Math.max(40, (tx - sx) / 2);
               const mx = (sx + tx) / 2, my = (sy + ty) / 2;
               const label = e.relation === "from" ? "" : e.relation;
-              const touch = hover ? (e.source === hover || e.target === hover ? "hot" : "dim") : "";
+              let state = "";
+              if (selected) state = related.edges.has(i) ? "hot" : "dim";
+              else if (hover) state = e.source === hover || e.target === hover ? "hot" : "dim";
+              const clickable = e.risk && hasCrossFinding;
+              const edgeLabel = e.risk
+                ? (hasCrossFinding ? "no key · S-STAT-002" : "no key")
+                : label;
+              const tipLines = [
+                e.relation === "from" ? "feeds result" : e.relation.toUpperCase(),
+                ...(e.on ? [e.on] : []),
+                ...(e.risk ? ["No join key: every left row pairs with every right row, multiplying the result."] : []),
+                ...(clickable ? ["Flagged by S-STAT-002 · click to trace"] : []),
+              ];
+              const pathD = `M${sx},${sy} C${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`;
               return (
-                <g key={i} className={`edge ${e.risk ? "risk" : ""} ${touch}`}>
-                  <path d={`M${sx},${sy} C${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`}
-                    markerEnd={`url(#${e.risk ? "arrow-risk" : "arrow"})`}>
-                    <title>{e.on ?? e.relation}</title>
-                  </path>
-                  {(label || e.risk) && (
+                <g key={i} className={`edge ${e.risk ? "risk" : ""} ${state} ${clickable ? "clickable" : ""}`}
+                  onClick={clickable ? () => setSelected("S-STAT-002") : undefined}
+                  onMouseEnter={(ev) => setTip({ x: ev.clientX, y: ev.clientY, lines: tipLines, risk: e.risk })}
+                  onMouseMove={(ev) => setTip((t) => (t ? { ...t, x: ev.clientX, y: ev.clientY } : t))}
+                  onMouseLeave={() => setTip(null)}>
+                  <path className="edge-hit" d={pathD} />
+                  <path className="edge-line" d={pathD} markerEnd={`url(#${e.risk ? "arrow-risk" : "arrow"})`} />
+                  <path className="flowline" d={pathD} />
+                  {(edgeLabel || e.risk) && (
                     <text x={mx} y={my - 6} className="edge-label" textAnchor="middle">
-                      {e.risk ? "no key" : label}
+                      {edgeLabel}
                     </text>
                   )}
                 </g>
               );
             })}
-            {Object.values(lay.placed).map(({ node, x, y }) => (
-              <Node key={node.id} node={node} x={x} y={y}
-                dim={hover != null && !neighbors.has(node.id)}
-                onHover={setHover} />
-            ))}
+            {Object.values(lay.placed).map(({ node, x, y }) => {
+              let dim = false; let linked = false;
+              if (selected) { linked = related.nodes.has(node.id); dim = !linked; }
+              else if (hover != null) dim = !neighbors.has(node.id);
+              return (
+                <Node key={node.id} node={node} x={x} y={y} dim={dim} linked={linked}
+                  onEnter={(ev) => showNodeTip(node, ev)}
+                  onMove={(ev) => setTip((t) => (t ? { ...t, x: ev.clientX, y: ev.clientY } : t))}
+                  onLeave={() => { setHover(null); setTip(null); }} />
+              );
+            })}
           </svg>
         )}
       </div>
+
+      {tip && (
+        <div className={`maptip ${tip.risk ? "risk" : ""}`}
+          style={{ left: Math.min(tip.x + 16, window.innerWidth - 280), top: tip.y + 16 }}>
+          {tip.lines.map((l, i) => (
+            <div key={i} className={i === 0 ? "tt-head" : "tt-line"}>{l}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function Node({ node, x, y, dim, onHover }: {
-  node: LineageNode; x: number; y: number; dim: boolean; onHover: (id: string | null) => void;
+function Node({ node, x, y, dim, linked, onEnter, onMove, onLeave }: {
+  node: LineageNode; x: number; y: number; dim: boolean; linked: boolean;
+  onEnter: (e: { clientX: number; clientY: number }) => void;
+  onMove: (e: { clientX: number; clientY: number }) => void;
+  onLeave: () => void;
 }) {
   const hasFlag = node.flags.length > 0;
+  const badge = nodeBadge(node);
   return (
-    <g className={`node ${dim ? "dim" : ""}`} transform={`translate(${x},${y})`}
-      onMouseEnter={() => onHover(node.id)} onMouseLeave={() => onHover(null)}>
-      <rect width={NODE_W} height={NODE_H} rx={13} className={`nbox k-${node.kind}`} />
+    <g className={`node ${dim ? "dim" : ""} ${linked ? "linked" : ""}`} transform={`translate(${x},${y})`}
+      onMouseEnter={onEnter} onMouseMove={onMove} onMouseLeave={onLeave}>
+      <rect width={NODE_W} height={NODE_H} rx={14} className={`nbox k-${node.kind}`} />
       <rect width={5} height={NODE_H} rx={2} className={`naccent k-${node.kind}`} />
-      <text x={18} y={22} className="nkind">{KIND_LABEL[node.kind] ?? node.kind}</text>
-      <text x={18} y={40} className="nlabel">{trim(node.label, 18)}</text>
-      {hasFlag && (
-        <>
-          <circle cx={NODE_W - 16} cy={18} r={4} className="nflag" />
-          <title>{node.flags.join(", ")}</title>
-        </>
-      )}
+      <text x={18} y={23} className="nkind">{KIND_LABEL[node.kind] ?? node.kind}</text>
+      <text x={18} y={41} className="nlabel">{trim(node.label, 18)}</text>
+      {badge && <text x={18} y={56} className="nbadge">{badge}</text>}
+      {hasFlag && <circle cx={NODE_W - 16} cy={18} r={4} className="nflag" />}
     </g>
   );
+}
+
+function nodeBadge(n: LineageNode): string {
+  const parts: string[] = [];
+  if (n.columns.length) parts.push(`${n.columns.length} col${n.columns.length === 1 ? "" : "s"}`);
+  if (n.calculations.length) parts.push(`ƒ${n.calculations.length}`);
+  if (n.filters.length) parts.push("filtered");
+  return parts.join(" · ");
 }
 
 function trim(s: string, n: number): string {
