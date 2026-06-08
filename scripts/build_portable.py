@@ -76,12 +76,15 @@ def _open_browser() -> None:
 
 
 if __name__ == "__main__":
+    import uvicorn
+    import web.api.app as appmod
+
+    token = getattr(appmod.app.state, "api_token", "")
     print(f"Plumb is running at http://{HOST}:{PORT}/")
+    print(f"API token (sent to your browser automatically; use it for scripts): {token}")
     print("Close this window to stop it.")
     threading.Thread(target=_open_browser, daemon=True).start()
-    import uvicorn
-
-    uvicorn.run("web.api.app:app", host=HOST, port=PORT, log_level="warning")
+    uvicorn.run(appmod.app, host=HOST, port=PORT, log_level="warning")
 '''
 
 RUN_BAT = (
