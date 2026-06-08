@@ -390,8 +390,19 @@ table.ev th { color: var(--fg-4); } table.ev td { font-family: ui-monospace, Men
 .map-risks { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 26px 0; }
 .map-risk { font-size: 12px; color: var(--neg); background: var(--neg-soft); border: 1px solid color-mix(in srgb, var(--neg) 30%, transparent);
   padding: 6px 12px; border-radius: 999px; }
+.zoom { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-3); border: 1px solid var(--line-1);
+  border-radius: 10px; padding: 3px; }
+.zbtn { border: 0; background: transparent; color: var(--fg-2); width: 30px; height: 28px; border-radius: 7px; font-size: 15px; }
+.zbtn:hover { background: var(--bg-1); color: var(--fg-1); }
+.zbtn.zval { width: 48px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .map-canvas { flex: 1; overflow: auto; padding: 26px; }
 .map-svg { display: block; }
+.map-svg .node { cursor: default; transition: opacity 0.15s; }
+.map-svg .node.dim { opacity: 0.22; }
+.map-svg .edge { transition: opacity 0.15s; }
+.map-svg .edge.dim { opacity: 0.15; }
+.map-svg .edge.hot path { stroke: var(--ai-2); stroke-width: 2.4; }
+.map-svg .edge.hot.risk path { stroke: var(--neg); }
 
 .map-svg .edge path { fill: none; stroke: var(--line-3); stroke-width: 1.6; }
 .map-svg .edge.risk path { stroke: var(--neg); stroke-dasharray: 5 4; stroke-width: 1.8; }

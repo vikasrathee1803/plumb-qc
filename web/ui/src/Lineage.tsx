@@ -43,7 +43,9 @@ function layout(graph: LineageGraph) {
   const byLayer = new Map<number, LineageNode[]>();
   for (const n of graph.nodes) {
     const l = layer.get(n.id) ?? 0;
-    (byLayer.get(l) ?? byLayer.set(l, []).get(l)!).push(n);
+    let col = byLayer.get(l);
+    if (!col) { col = []; byLayer.set(l, col); }
+    col.push(n);
   }
   const layers = [...byLayer.keys()].sort((a, b) => a - b);
   const maxRows = Math.max(1, ...layers.map((l) => byLayer.get(l)!.length));
@@ -67,21 +69,55 @@ export function LineageMap({ open, onClose, sql }: {
   useEscape(open, onClose);
   const [graph, setGraph] = useState<LineageGraph | null>(null);
   const [error, setError] = useState("");
+  const [zoom, setZoom] = useState(1);
+  const [hover, setHover] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setGraph(null); setError("");
+    setGraph(null); setError(""); setZoom(1); setHover(null);
     fetchLineage(sql).then(setGraph).catch((e) => setError(String(e.message ?? e)));
   }, [open, sql]);
 
   const lay = useMemo(() => (graph ? layout(graph) : null), [graph]);
+  const canvasW = lay ? Math.max(lay.width, 640) : 640;
+  const canvasH = lay ? Math.max(lay.height, 200) : 200;
+
+  const neighbors = useMemo(() => {
+    const set = new Set<string>();
+    if (!hover || !graph) return set;
+    set.add(hover);
+    for (const e of graph.edges) {
+      if (e.source === hover) set.add(e.target);
+      if (e.target === hover) set.add(e.source);
+    }
+    return set;
+  }, [hover, graph]);
+
+  const counts = useMemo(() => {
+    const c = { table: 0, cte: 0, subquery: 0, risk: graph?.risks.length ?? 0 };
+    for (const n of graph?.nodes ?? []) {
+      if (n.kind === "table") c.table++;
+      else if (n.kind === "cte") c.cte++;
+      else if (n.kind === "subquery") c.subquery++;
+    }
+    return c;
+  }, [graph]);
+
+  const summary = graph
+    ? [
+        `${counts.table} table${counts.table === 1 ? "" : "s"}`,
+        counts.cte ? `${counts.cte} CTE${counts.cte === 1 ? "" : "s"}` : "",
+        counts.subquery ? `${counts.subquery} subquer${counts.subquery === 1 ? "y" : "ies"}` : "",
+        counts.risk ? `${counts.risk} risk${counts.risk === 1 ? "" : "s"}` : "",
+      ].filter(Boolean).join(" · ")
+    : "";
 
   return (
     <div className={`mapov ${open ? "open" : ""}`} role="dialog" aria-hidden={!open}>
       <div className="map-head">
         <div>
           <h2>Query map</h2>
-          <div className="map-sub">How your SQL flows: sources into joins into the result.</div>
+          <div className="map-sub">{summary || "How your SQL flows: sources into joins into the result."}</div>
         </div>
         <span className="spacer" />
         <div className="legend">
@@ -90,6 +126,11 @@ export function LineageMap({ open, onClose, sql }: {
           <span className="lg"><i className="k-subquery" />Subquery</span>
           <span className="lg"><i className="k-output" />Result</span>
           <span className="lg"><i className="k-risk" />Fan-out risk</span>
+        </div>
+        <div className="zoom">
+          <button className="zbtn" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, z - 0.15))}>−</button>
+          <button className="zbtn zval" onClick={() => setZoom(1)} title="Reset zoom">{Math.round(zoom * 100)}%</button>
+          <button className="zbtn" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(2, z + 0.15))}>+</button>
         </div>
         <button className="done" onClick={onClose}>Close</button>
       </div>
@@ -104,8 +145,8 @@ export function LineageMap({ open, onClose, sql }: {
         {error && <div className="empty">{error}</div>}
         {!graph && !error && <div className="empty">Mapping your query…</div>}
         {graph && lay && (
-          <svg width={Math.max(lay.width, 640)} height={Math.max(lay.height, 200)}
-            className="map-svg">
+          <svg width={canvasW * zoom} height={canvasH * zoom}
+            viewBox={`0 0 ${canvasW} ${canvasH}`} className="map-svg">
             <defs>
               <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3"
                 orient="auto" markerUnits="strokeWidth">
@@ -124,8 +165,9 @@ export function LineageMap({ open, onClose, sql }: {
               const dx = Math.max(40, (tx - sx) / 2);
               const mx = (sx + tx) / 2, my = (sy + ty) / 2;
               const label = e.relation === "from" ? "" : e.relation;
+              const touch = hover ? (e.source === hover || e.target === hover ? "hot" : "dim") : "";
               return (
-                <g key={i} className={`edge ${e.risk ? "risk" : ""}`}>
+                <g key={i} className={`edge ${e.risk ? "risk" : ""} ${touch}`}>
                   <path d={`M${sx},${sy} C${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`}
                     markerEnd={`url(#${e.risk ? "arrow-risk" : "arrow"})`}>
                     <title>{e.on ?? e.relation}</title>
@@ -139,7 +181,9 @@ export function LineageMap({ open, onClose, sql }: {
               );
             })}
             {Object.values(lay.placed).map(({ node, x, y }) => (
-              <Node key={node.id} node={node} x={x} y={y} />
+              <Node key={node.id} node={node} x={x} y={y}
+                dim={hover != null && !neighbors.has(node.id)}
+                onHover={setHover} />
             ))}
           </svg>
         )}
@@ -148,10 +192,13 @@ export function LineageMap({ open, onClose, sql }: {
   );
 }
 
-function Node({ node, x, y }: { node: LineageNode; x: number; y: number }) {
+function Node({ node, x, y, dim, onHover }: {
+  node: LineageNode; x: number; y: number; dim: boolean; onHover: (id: string | null) => void;
+}) {
   const hasFlag = node.flags.length > 0;
   return (
-    <g className="node" transform={`translate(${x},${y})`}>
+    <g className={`node ${dim ? "dim" : ""}`} transform={`translate(${x},${y})`}
+      onMouseEnter={() => onHover(node.id)} onMouseLeave={() => onHover(null)}>
       <rect width={NODE_W} height={NODE_H} rx={13} className={`nbox k-${node.kind}`} />
       <rect width={5} height={NODE_H} rx={2} className={`naccent k-${node.kind}`} />
       <text x={18} y={22} className="nkind">{KIND_LABEL[node.kind] ?? node.kind}</text>
