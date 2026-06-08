@@ -1,5 +1,5 @@
 import type {
-  About, CatalogCheck, CheckState, Connection, HistoryRun, RunResult, Trend,
+  About, CatalogCheck, CheckState, Connection, HistoryRun, LineageGraph, RunResult, Trend,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -32,6 +32,17 @@ export const fetchHistory = (opts?: { limit?: number; q?: string }) => {
 export const fetchRun = (id: string) => getJSON<RunResult>(`/api/run/${id}`);
 export const fetchTrend = (target: string) =>
   getJSON<Trend>(`/api/trend?target=${encodeURIComponent(target)}`);
+
+export async function fetchLineage(sql: string): Promise<LineageGraph> {
+  const r = await fetch("/api/lineage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sql }),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail ?? "could not build map");
+  return j as LineageGraph;
+}
 
 export async function runSql(body: {
   sql: string;

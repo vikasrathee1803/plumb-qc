@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from plumb import __version__
 from plumb.baseline.store import make_baseline_store
+from plumb.checks._sql import SqlParseError
 from plumb.checks._tableau import TableauParseError, parse_workbook
 from plumb.config.loader import (
     PLUMB_HOME,
@@ -39,6 +40,7 @@ from plumb.connect.snowflake import (
     SnowflakeSession,
 )
 from plumb.engine.catalog import catalog as check_catalog
+from plumb.engine.lineage import build_lineage
 from plumb.engine.models import RunResult, Target
 from plumb.engine.runner import RunRequest, run_checks
 from plumb.report.html import render_html
@@ -114,6 +116,10 @@ class CheckConfig(BaseModel):
     id: str
     enabled: bool = True
     params: dict[str, Any] = {}
+
+
+class LineageRequest(BaseModel):
+    sql: str
 
 
 class SqlCheckRequest(BaseModel):
@@ -308,6 +314,18 @@ def create_app() -> FastAPI:
         rules_dir = REPO_ROOT / "rules"
         names = sorted(p.stem for p in rules_dir.glob("*.yml")) if rules_dir.exists() else []
         return {"default": "plumb", "rulesets": names}
+
+    @app.post("/api/lineage")
+    def lineage(req: LineageRequest) -> dict[str, Any]:
+        """The relation-level lineage graph for a SQL build: source tables
+        and views into CTEs and joins into the result, with fan-out risk."""
+        if not req.sql.strip():
+            raise HTTPException(status_code=400, detail="sql is required")
+        try:
+            graph = build_lineage(req.sql)
+        except SqlParseError as exc:
+            raise HTTPException(status_code=400, detail=f"could not parse SQL: {exc}") from exc
+        return graph.model_dump(mode="json")
 
     @app.get("/api/checks")
     def checks() -> dict[str, Any]:

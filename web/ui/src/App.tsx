@@ -6,6 +6,7 @@ import {
 import { Architecture } from "./Architecture";
 import { ChecksEditor, CustomChecksEditor } from "./Customize";
 import { HistoryModal, RecentRuns } from "./History";
+import { LineageMap } from "./Lineage";
 import { Report } from "./Report";
 import { Drawer, Segmented, SwitchRow } from "./ui";
 import type { About, CatalogCheck, CheckState, Connection, CustomCheck, HistoryRun, RunResult } from "./types";
@@ -132,6 +133,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
   const [checkState, setCheckState] = useState<Record<string, CheckState>>({});
   const [custom, setCustom] = useState<CustomCheck[]>([]);
   const [drawer, setDrawer] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -188,6 +190,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
         </label>
         <div className="setup">
           <span className="desc"><b>{enabledCount}</b> checks · <b>{preset.label}</b> preset · <b>{standardLabel}</b> standard</span>
+          <button className="linkbtn" onClick={() => setMapOpen(true)}>Map</button>
           <button className="linkbtn" onClick={() => setDrawer(true)}>Customize</button>
         </div>
         <div className="toggles">
@@ -222,6 +225,8 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
         <ChecksEditor catalog={sqlCatalog} state={checkState} setState={setCheckState} />
         <CustomChecksEditor checks={custom} setChecks={setCustom} />
       </Drawer>
+
+      <LineageMap open={mapOpen} onClose={() => setMapOpen(false)} sql={sql} />
     </>
   );
 }

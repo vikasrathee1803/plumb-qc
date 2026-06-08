@@ -105,3 +105,25 @@ export interface Trend {
   total: number;
   ready_or_better: number;
 }
+
+export interface LineageNode {
+  id: string;
+  label: string;
+  kind: "table" | "cte" | "subquery" | "output" | "values";
+  detail: string;
+  flags: string[];
+}
+
+export interface LineageEdge {
+  source: string;
+  target: string;
+  relation: string;
+  on: string | null;
+  risk: boolean;
+}
+
+export interface LineageGraph {
+  nodes: LineageNode[];
+  edges: LineageEdge[];
+  risks: string[];
+}

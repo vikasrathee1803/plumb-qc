@@ -26,6 +26,20 @@ def test_profiles_lists_shipped_profiles():
     assert "marketing" in body["profiles"]
 
 
+def test_lineage_endpoint_returns_graph():
+    r = client.post("/api/lineage", json={"sql": "SELECT a FROM t, u"})
+    assert r.status_code == 200
+    g = r.json()
+    kinds = {n["kind"] for n in g["nodes"]}
+    assert "table" in kinds and "output" in kinds
+    assert any(e["risk"] for e in g["edges"])  # the comma join is flagged
+    assert g["risks"]
+
+
+def test_lineage_unparseable_is_400():
+    assert client.post("/api/lineage", json={"sql": "SELEKT )("}).status_code == 400
+
+
 def test_rulesets_lists_check_sets():
     r = client.get("/api/rulesets")
     assert r.status_code == 200

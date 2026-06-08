@@ -1,0 +1,168 @@
+"""Relation-level lineage for a SQL build.
+
+Walks the sqlglot AST and produces a directed graph: source tables and
+views flow into CTEs and subqueries, which flow into the result. Joins are
+edges, annotated with type and key, and cross or comma joins are flagged as
+fan-out risk. This is the structural view behind the verdict; it is derived
+from the same parser the checks use, so what you see is what runs.
+
+Deliberately relation-level for now: column-level lineage and stored
+procedure control flow are out of scope until this is excellent.
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+from sqlglot import exp
+
+from plumb.checks._sql import SqlParseError, parse_one
+
+NodeKind = Literal["table", "cte", "subquery", "output", "values"]
+
+
+class LineageNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+    kind: NodeKind
+    detail: str = ""
+    flags: list[str] = Field(default_factory=list)
+
+
+class LineageEdge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    target: str
+    relation: str = "from"  # "from", "inner join", "left join", "cross", ...
+    on: str | None = None
+    risk: bool = False
+
+
+class LineageGraph(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nodes: list[LineageNode] = Field(default_factory=list)
+    edges: list[LineageEdge] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+
+class _Builder:
+    def __init__(self, cte_names: set[str]) -> None:
+        self.cte_names = cte_names
+        self.nodes: dict[str, LineageNode] = {}
+        self.edges: list[LineageEdge] = []
+        self.risks: list[str] = []
+        self._sub = 0
+
+    def node(self, node_id: str, *, label: str, kind: NodeKind, detail: str = "") -> str:
+        if node_id not in self.nodes:
+            self.nodes[node_id] = LineageNode(id=node_id, label=label, kind=kind, detail=detail)
+        return node_id
+
+    def flag(self, node_id: str, flag: str) -> None:
+        node = self.nodes.get(node_id)
+        if node is not None and flag not in node.flags:
+            node.flags.append(flag)
+
+    def relation_node(self, rel: exp.Expression) -> str:
+        if isinstance(rel, exp.Table):
+            name = rel.name
+            if name.lower() in self.cte_names and not rel.db and not rel.catalog:
+                return self.node(f"cte:{name.lower()}", label=name, kind="cte")
+            fqn = ".".join(p for p in (rel.catalog, rel.db, rel.name) if p)
+            return self.node(f"table:{fqn.lower()}", label=name, kind="table", detail=fqn)
+        if isinstance(rel, exp.Subquery):
+            self._sub += 1
+            sid = f"sub:{self._sub}"
+            self.node(sid, label=rel.alias or "subquery", kind="subquery")
+            inner = rel.this
+            if isinstance(inner, exp.Select):
+                self.process(inner, sid)
+            return sid
+        # values, table functions, etc.
+        self._sub += 1
+        gid = f"expr:{self._sub}"
+        return self.node(gid, label=type(rel).__name__.lower(), kind="values")
+
+    def process(self, select: exp.Select, consumer_id: str) -> None:
+        # SELECT * smell on the consuming scope.
+        if any(isinstance(p, exp.Star) for p in select.expressions):
+            self.flag(consumer_id, "SELECT *")
+
+        relations: list[tuple[exp.Expression, exp.Join | None]] = []
+        from_ = select.args.get("from")
+        if from_ is not None and from_.this is not None:
+            relations.append((from_.this, None))
+        for join in select.args.get("joins", []):
+            relations.append((join.this, join))
+
+        for rel, join in relations:
+            rid = self.relation_node(rel)
+            relation, on, risk = self._edge_meta(join)
+            self.edges.append(
+                LineageEdge(source=rid, target=consumer_id, relation=relation, on=on, risk=risk)
+            )
+            if risk:
+                label = self.nodes[rid].label
+                self.risks.append(f"{relation} on {label} has no join condition (fan-out risk)")
+
+    def _edge_meta(self, join: exp.Join | None) -> tuple[str, str | None, bool]:
+        if join is None:
+            return "from", None, False
+        kind = (join.kind or "").upper()
+        side = (join.side or "").upper()
+        on = join.args.get("on")
+        using = join.args.get("using")
+        if kind == "CROSS":
+            return "cross", None, True
+        if on is None and not using and not side and not kind:
+            return "comma", None, True  # implicit cross product
+        parts = [p for p in (side, kind) if p] or ["INNER"]
+        relation = " ".join(parts).lower() + " join"
+        on_text = _short(on.sql(dialect="snowflake")) if on is not None else None
+        return relation, on_text, False
+
+
+def _short(text: str, limit: int = 80) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def build_lineage(sql: str) -> LineageGraph:
+    """Build the relation-level lineage graph for a SQL statement."""
+    try:
+        tree = parse_one(sql)
+    except SqlParseError as exc:
+        raise SqlParseError(str(exc)) from exc
+
+    cte_names = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+    builder = _Builder(cte_names)
+
+    with_ = tree.args.get("with") if isinstance(tree, exp.Select) else None
+    if with_ is not None:
+        for cte in with_.expressions:
+            cid = builder.node(
+                f"cte:{cte.alias_or_name.lower()}", label=cte.alias_or_name, kind="cte"
+            )
+            inner = cte.this
+            if isinstance(inner, exp.Select):
+                builder.process(inner, cid)
+
+    builder.node("output", label="result", kind="output")
+    if isinstance(tree, exp.Select):
+        builder.process(tree, "output")
+    elif isinstance(tree, exp.Subquery) and isinstance(tree.this, exp.Select):
+        builder.process(tree.this, "output")
+
+    # de-duplicate the risk summary, keep order
+    seen: set[str] = set()
+    risks: list[str] = []
+    for r in builder.risks:
+        if r not in seen:
+            seen.add(r)
+            risks.append(r)
+    return LineageGraph(nodes=list(builder.nodes.values()), edges=builder.edges, risks=risks)
