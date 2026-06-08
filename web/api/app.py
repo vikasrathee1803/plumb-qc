@@ -10,6 +10,7 @@ connection; set static_only false to use the configured connection.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -61,6 +62,12 @@ _HISTORY_MEM_CAP = 1000
 # pollute a user's real history.
 WEB_REPORTS_DIR = Path(os.environ.get("PLUMB_WEB_REPORTS_DIR") or (PLUMB_HOME / "reports" / "web"))
 HISTORY_FILE = WEB_REPORTS_DIR / "history.jsonl"
+
+# Run ids are uuids; reject anything else before it touches the filesystem
+# (path traversal guard). SQL inputs are capped to keep the parser bounded.
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_SQL_CHARS = 100_000
+_MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
 
 
 def _history_entry(result: RunResult) -> dict[str, Any]:
@@ -321,6 +328,8 @@ def create_app() -> FastAPI:
         and views into CTEs and joins into the result, with fan-out risk."""
         if not req.sql.strip():
             raise HTTPException(status_code=400, detail="sql is required")
+        if len(req.sql) > _MAX_SQL_CHARS:
+            raise HTTPException(status_code=400, detail="SQL is too large to map")
         try:
             graph = build_lineage(req.sql)
         except SqlParseError as exc:
@@ -401,6 +410,8 @@ def create_app() -> FastAPI:
     def check_sql(req: SqlCheckRequest) -> dict[str, Any]:
         if not req.sql.strip():
             raise HTTPException(status_code=400, detail="sql is required")
+        if len(req.sql) > _MAX_SQL_CHARS:
+            raise HTTPException(status_code=400, detail="SQL is too large")
         ruleset = _resolve_ruleset(req.profile, req.rules)
         if req.checks is not None:
             # The UI sent an explicit check configuration; it replaces the
@@ -463,6 +474,8 @@ def create_app() -> FastAPI:
             )
         suffix = Path(workbook.filename or "wb.twb").suffix or ".twb"
         data = await workbook.read()
+        if len(data) > _MAX_WORKBOOK_BYTES:
+            raise HTTPException(status_code=400, detail="workbook is too large")
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
             tmp_path = Path(tmp.name)
@@ -535,6 +548,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/report/{run_id}.html", response_class=HTMLResponse)
     def report_html(run_id: str) -> HTMLResponse:
+        if not _RUN_ID_RE.match(run_id):
+            raise HTTPException(status_code=404, detail="no report for that run id")
         result = _REPORTS.get(run_id)
         if result is not None:
             return HTMLResponse(content=render_html(result))

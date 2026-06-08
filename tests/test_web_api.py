@@ -302,6 +302,20 @@ def test_report_html_unknown_run_is_404():
     assert client.get("/api/report/does-not-exist.html").status_code == 404
 
 
+def test_report_path_traversal_is_rejected():
+    # A run id with traversal/path characters must never reach the filesystem.
+    for bad in ("..%2f..%2fsecret", "a/b", "a.b", "a b"):
+        r = client.get(f"/api/report/{bad}.html")
+        assert r.status_code == 404
+
+
+def test_oversized_sql_is_rejected():
+    big = "SELECT a FROM t WHERE x IN (" + ",".join("1" for _ in range(60000)) + ")"
+    assert len(big) > 100_000
+    assert client.post("/api/check/sql", json={"sql": big, "static_only": True}).status_code == 400
+    assert client.post("/api/lineage", json={"sql": big}).status_code == 400
+
+
 def test_report_link_survives_a_restart():
     """A shared report link must not rot: a fresh app (simulating a restart,
     empty in-memory store) still serves the persisted HTML."""
