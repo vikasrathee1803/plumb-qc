@@ -62,10 +62,30 @@ import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "app"))
-# Keep run history and reports inside the portable folder.
-os.environ.setdefault(
-    "PLUMB_WEB_REPORTS_DIR", os.path.join(HERE, "data", "reports", "web")
-)
+
+
+def _writable_data_root():
+    """A data dir we can write to with no admin rights: the portable folder if
+    it is writable, otherwise a per-user location (the LOCALAPPDATA folder, or
+    the home directory). Plumb never writes to a system path."""
+    candidate = os.path.join(HERE, "data")
+    try:
+        os.makedirs(candidate, exist_ok=True)
+        probe = os.path.join(candidate, ".write_test")
+        with open(probe, "w") as fh:
+            fh.write("ok")
+        os.remove(probe)
+        return candidate
+    except OSError:
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        root = os.path.join(base, "Plumb")
+        os.makedirs(root, exist_ok=True)
+        return root
+
+
+_DATA = _writable_data_root()
+os.environ.setdefault("PLUMB_WEB_REPORTS_DIR", os.path.join(_DATA, "reports", "web"))
+os.environ.setdefault("PLUMB_AUDIT_FILE", os.path.join(_DATA, "audit.jsonl"))
 
 HOST, PORT = "127.0.0.1", 8777
 
@@ -100,8 +120,15 @@ README = (
     "======================\r\n\r\n"
     "Double-click run.bat. Your browser opens at http://127.0.0.1:8777/.\r\n"
     "Close the console window to stop.\r\n\r\n"
-    "Nothing to install: this folder carries its own Python and all\r\n"
-    "dependencies. Move or copy the whole folder anywhere.\r\n\r\n"
+    "No administrator rights needed, to install or to run:\r\n"
+    "  - Nothing is installed. This folder carries its own Python and every\r\n"
+    "    dependency. Unzip it anywhere you can write (Desktop, Downloads, a\r\n"
+    "    home or network folder) and run it.\r\n"
+    "  - It listens only on 127.0.0.1 (loopback) on port 8777, so there is no\r\n"
+    "    firewall prompt and nothing is exposed to the network.\r\n"
+    "  - It writes only to this folder's data\\ directory, or to your user\r\n"
+    "    profile if this folder is read-only. It never touches Program Files,\r\n"
+    "    the registry, or any system path.\r\n\r\n"
     "Live Snowflake checks read ~/.plumb/connection.yml (key-pair / SSO).\r\n"
     "Without it, Plumb runs every static check and the query map offline.\r\n"
 )

@@ -87,6 +87,13 @@ close the audit and supply-chain items below before production use.
 - Fail-loud configuration. All config models forbid unknown fields (pydantic
   `extra="forbid"`), so a malformed or tampered ruleset is rejected, not
   silently misread.
+- No elevated privileges to install or run. The portable build is an unzip,
+  not an installer: no admin, no UAC, no registry, no Program Files, no system
+  path. It binds only to 127.0.0.1:8777 (a non-privileged loopback port, so no
+  firewall prompt) and writes only to the portable folder's `data\` directory
+  or, if that is read-only, the user profile. Verified running as a standard
+  (non-administrator) user. The pip/pipx install path is likewise per-user (a
+  virtualenv or `--user`); a system-wide install is never required.
 
 ## 3. Findings
 
