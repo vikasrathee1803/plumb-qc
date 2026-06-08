@@ -71,9 +71,53 @@ def test_subquery_becomes_a_node():
     assert "table:base" in _by_id(g)
 
 
+def test_union_pulls_both_arms():
+    g = build_lineage("SELECT a FROM t1 UNION ALL SELECT a FROM t2")
+    nodes = _by_id(g)
+    assert "table:t1" in nodes and "table:t2" in nodes
+    # both arms feed the result
+    assert any(e.source == "table:t1" and e.target == "output" for e in g.edges)
+    assert any(e.source == "table:t2" and e.target == "output" for e in g.edges)
+
+
+def test_union_inside_a_cte():
+    sql = "WITH u AS (SELECT a FROM t1 UNION SELECT a FROM t2) SELECT * FROM u"
+    g = build_lineage(sql)
+    nodes = _by_id(g)
+    assert "cte:u" in nodes
+    assert any(e.source == "table:t1" and e.target == "cte:u" for e in g.edges)
+    assert any(e.source == "table:t2" and e.target == "cte:u" for e in g.edges)
+
+
+def test_nested_subquery_in_join():
+    g = build_lineage("SELECT a FROM base b JOIN (SELECT id FROM inner_t) s ON b.id = s.id")
+    nodes = _by_id(g)
+    assert "table:base" in nodes and "table:inner_t" in nodes
+    assert any(n.kind == "subquery" for n in g.nodes)
+
+
 def test_unparseable_sql_raises():
     with pytest.raises(SqlParseError):
         build_lineage("SELEKT FROM WHERE )(")
+
+
+def test_deeply_nested_subqueries_do_not_crash():
+    # 80 levels of nesting must not raise RecursionError; depth-bounded.
+    sql = "SELECT a FROM base"
+    for _ in range(80):
+        sql = f"SELECT a FROM ({sql}) x"
+    g = build_lineage(sql)  # should return, bounded, not blow the stack
+    assert any(n.kind == "output" for n in g.nodes)
+
+
+def test_recursive_cte_has_no_self_loop():
+    sql = (
+        "WITH RECURSIVE nums AS ("
+        "SELECT 1 AS n UNION ALL SELECT n + 1 FROM nums WHERE n < 10"
+        ") SELECT n FROM nums"
+    )
+    g = build_lineage(sql)
+    assert not any(e.source == e.target for e in g.edges)
 
 
 def test_graph_serializes_to_contract():

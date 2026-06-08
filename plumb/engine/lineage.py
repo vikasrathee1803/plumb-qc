@@ -50,6 +50,9 @@ class LineageGraph(BaseModel):
     risks: list[str] = Field(default_factory=list)
 
 
+_MAX_DEPTH = 60  # bound recursion on pathologically nested SQL
+
+
 class _Builder:
     def __init__(self, cte_names: set[str]) -> None:
         self.cte_names = cte_names
@@ -57,6 +60,7 @@ class _Builder:
         self.edges: list[LineageEdge] = []
         self.risks: list[str] = []
         self._sub = 0
+        self._depth = 0
 
     def node(self, node_id: str, *, label: str, kind: NodeKind, detail: str = "") -> str:
         if node_id not in self.nodes:
@@ -79,14 +83,30 @@ class _Builder:
             self._sub += 1
             sid = f"sub:{self._sub}"
             self.node(sid, label=rel.alias or "subquery", kind="subquery")
-            inner = rel.this
-            if isinstance(inner, exp.Select):
-                self.process(inner, sid)
+            self.process_query(rel.this, sid)
             return sid
         # values, table functions, etc.
         self._sub += 1
         gid = f"expr:{self._sub}"
         return self.node(gid, label=type(rel).__name__.lower(), kind="values")
+
+    def process_query(self, expr: exp.Expression, consumer_id: str) -> None:
+        """Feed a query body (a SELECT, a set operation, or a parenthesized
+        subquery) into the consumer, descending through unions so both arms
+        contribute their sources. Depth-bounded against pathological nesting."""
+        if self._depth >= _MAX_DEPTH:
+            return
+        self._depth += 1
+        try:
+            if isinstance(expr, exp.Subquery):
+                self.process_query(expr.this, consumer_id)
+            elif isinstance(expr, exp.SetOperation):
+                self.process_query(expr.this, consumer_id)
+                self.process_query(expr.expression, consumer_id)
+            elif isinstance(expr, exp.Select):
+                self.process(expr, consumer_id)
+        finally:
+            self._depth -= 1
 
     def process(self, select: exp.Select, consumer_id: str) -> None:
         # SELECT * smell on the consuming scope.
@@ -102,6 +122,8 @@ class _Builder:
 
         for rel, join in relations:
             rid = self.relation_node(rel)
+            if rid == consumer_id:
+                continue  # recursive CTE self-reference; skip the self-loop
             relation, on, risk = self._edge_meta(join)
             self.edges.append(
                 LineageEdge(source=rid, target=consumer_id, relation=relation, on=on, risk=risk)
@@ -138,25 +160,22 @@ def build_lineage(sql: str) -> LineageGraph:
         tree = parse_one(sql)
     except SqlParseError as exc:
         raise SqlParseError(str(exc)) from exc
+    except RecursionError as exc:
+        raise SqlParseError("SQL is too deeply nested to map") from exc
 
     cte_names = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
     builder = _Builder(cte_names)
 
-    with_ = tree.args.get("with") if isinstance(tree, exp.Select) else None
+    with_ = tree.args.get("with") if isinstance(tree, (exp.Select, exp.SetOperation)) else None
     if with_ is not None:
         for cte in with_.expressions:
             cid = builder.node(
                 f"cte:{cte.alias_or_name.lower()}", label=cte.alias_or_name, kind="cte"
             )
-            inner = cte.this
-            if isinstance(inner, exp.Select):
-                builder.process(inner, cid)
+            builder.process_query(cte.this, cid)
 
     builder.node("output", label="result", kind="output")
-    if isinstance(tree, exp.Select):
-        builder.process(tree, "output")
-    elif isinstance(tree, exp.Subquery) and isinstance(tree.this, exp.Select):
-        builder.process(tree.this, "output")
+    builder.process_query(tree, "output")
 
     # de-duplicate the risk summary, keep order
     seen: set[str] = set()
