@@ -78,10 +78,12 @@ textarea { font-family: ui-monospace, "SF Mono", Menlo, monospace; resize: verti
 textarea:focus, input:focus { border-color: var(--ai-edge); box-shadow: 0 0 0 4px var(--ai-soft); }
 
 /* File dropzone */
-.drop { border: 1.5px dashed var(--line-3); border-radius: 16px; padding: 30px; text-align: center;
-  background: var(--bg-2); color: var(--fg-3); cursor: pointer; transition: all 0.15s; }
+.drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  width: 100%; min-height: 132px; border: 1.5px dashed var(--line-3); border-radius: 16px; padding: 28px;
+  text-align: center; background: var(--bg-2); color: var(--fg-3); cursor: pointer; transition: all 0.15s; }
 .drop:hover { border-color: var(--ai-edge); color: var(--fg-2); }
-.drop strong { color: var(--fg-1); }
+.drop strong { color: var(--fg-1); font-size: 15px; }
+.drop .note { margin: 0; }
 .drop input { display: none; }
 
 /* Setup summary bar */
