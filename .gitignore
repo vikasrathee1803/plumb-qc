@@ -17,3 +17,5 @@ htmlcov/
 .plumb/
 .tableau_work/
 .uitest/
+# Internal session working notes; never publish.
+HANDOVER.md
