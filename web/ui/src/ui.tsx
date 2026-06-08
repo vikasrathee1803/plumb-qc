@@ -45,6 +45,26 @@ export function Segmented<T extends string>({ value, onChange, options, full }: 
   );
 }
 
+export function Modal({ open, onClose, title, head, children }: {
+  open: boolean; onClose: () => void; title: string; head?: ReactNode; children: ReactNode;
+}) {
+  useEscape(open, onClose);
+  return (
+    <>
+      <div className={`scrim ${open ? "open" : ""}`} onClick={onClose} />
+      <div className={`modal ${open ? "open" : ""}`} role="dialog" aria-hidden={!open}>
+        <div className="modal-head">
+          <h2>{title}</h2>
+          {head}
+          <span className="spacer" />
+          <button className="done" onClick={onClose}>Close</button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </>
+  );
+}
+
 export function Drawer({ open, onClose, title, children }: {
   open: boolean; onClose: () => void; title: string; children: ReactNode;
 }) {

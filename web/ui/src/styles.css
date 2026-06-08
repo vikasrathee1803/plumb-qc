@@ -199,6 +199,29 @@ textarea:focus, input:focus { border-color: var(--ai-edge); box-shadow: 0 0 0 4p
 .recent-chip .rtime { color: var(--fg-4); font-size: 11px; }
 .rdot.d-BLOCKED { background: var(--neg); } .rdot.d-REVIEW { background: var(--warn); }
 .rdot.d-READY_WITH_NOTES { background: var(--info); } .rdot.d-READY { background: var(--pos); }
+.recent-chip.all { color: var(--ai-2); border-color: var(--ai-edge); background: var(--ai-soft); font-weight: 600; }
+
+/* History modal */
+.modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -48%) scale(0.97);
+  width: min(620px, 94vw); max-height: 80vh; background: var(--bg-1); border: 1px solid var(--line-1);
+  border-radius: 20px; box-shadow: var(--shadow-3); z-index: 50; display: flex; flex-direction: column;
+  opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s cubic-bezier(0.32,0.72,0,1); }
+.modal.open { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
+.modal-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line-1); }
+.modal-head h2 { margin: 0; font-size: 17px; font-weight: 640; flex: none; }
+.modal-head .spacer { flex: 1; }
+.hist-search { max-width: 300px; padding: 8px 12px !important; font-size: 13px; border-radius: 10px !important; }
+.modal-body { overflow-y: auto; padding: 10px; }
+.hist-list { display: flex; flex-direction: column; }
+.hist-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 0; background: transparent;
+  border-radius: 10px; text-align: left; color: var(--fg-1); transition: background 0.1s; }
+.hist-row:hover { background: var(--bg-2); }
+.hist-target { font-weight: 540; font-size: 13.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+.hist-verdict { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.hv-BLOCKED { background: var(--neg-soft); color: var(--neg); } .hv-REVIEW { background: var(--warn-soft); color: var(--warn); }
+.hv-READY_WITH_NOTES { background: var(--info-soft); color: var(--info); } .hv-READY { background: var(--pos-soft); color: var(--pos); }
+.hist-meta { color: var(--fg-4); font-size: 12px; flex: 1; }
+.hist-time { color: var(--fg-4); font-size: 12px; flex: none; }
 
 /* Build trend */
 .trend { margin-top: 16px; padding: 16px 18px; background: var(--bg-1); border: 1px solid var(--line-1); border-radius: 16px; }

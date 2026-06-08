@@ -20,7 +20,15 @@ export const fetchRulesetChecks = (name: string) =>
   getJSON<{ version: string; checks: CheckState[] }>(`/api/ruleset?name=${encodeURIComponent(name)}`);
 export const fetchProfileChanges = (name: string) =>
   getJSON<{ name: string; changes: string[] }>(`/api/profile?name=${encodeURIComponent(name)}`);
-export const fetchHistory = () => getJSON<{ runs: HistoryRun[] }>("/api/history");
+export const fetchHistory = (opts?: { limit?: number; q?: string }) => {
+  const p = new URLSearchParams();
+  if (opts?.limit != null) p.set("limit", String(opts.limit));
+  if (opts?.q) p.set("q", opts.q);
+  const qs = p.toString();
+  return getJSON<{ runs: HistoryRun[]; total: number; matched: number }>(
+    `/api/history${qs ? `?${qs}` : ""}`
+  );
+};
 export const fetchRun = (id: string) => getJSON<RunResult>(`/api/run/${id}`);
 export const fetchTrend = (target: string) =>
   getJSON<Trend>(`/api/trend?target=${encodeURIComponent(target)}`);

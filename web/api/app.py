@@ -9,6 +9,7 @@ connection; set static_only false to use the configured connection.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import uuid
 from pathlib import Path
@@ -54,8 +55,9 @@ _REPORTS: dict[str, RunResult] = {}
 _HISTORY: list[dict[str, Any]] = []  # most recent first
 _HISTORY_MEM_CAP = 1000
 # Reports and the run log are written here so shared links and trends
-# survive a restart and accumulate over time.
-WEB_REPORTS_DIR = PLUMB_HOME / "reports" / "web"
+# survive a restart and accumulate over time. Overridable so tests never
+# pollute a user's real history.
+WEB_REPORTS_DIR = Path(os.environ.get("PLUMB_WEB_REPORTS_DIR") or (PLUMB_HOME / "reports" / "web"))
 HISTORY_FILE = WEB_REPORTS_DIR / "history.jsonl"
 
 
@@ -467,9 +469,17 @@ def create_app() -> FastAPI:
         return result.model_dump(mode="json")
 
     @app.get("/api/history")
-    def history() -> dict[str, Any]:
-        """Recent runs, most recent first, for the confidence-over-time view."""
-        return {"runs": _HISTORY[:25]}
+    def history(limit: int = 25, q: str | None = None) -> dict[str, Any]:
+        """Runs, most recent first. limit caps the page; q filters by target
+        or verdict (case-insensitive) for the full-history search."""
+        runs = _HISTORY
+        if q:
+            needle = q.lower()
+            runs = [
+                r for r in runs
+                if needle in r["target"].lower() or needle in r["verdict"].lower()
+            ]
+        return {"runs": runs[: max(0, limit)], "total": len(_HISTORY), "matched": len(runs)}
 
     @app.get("/api/trend")
     def trend(target: str) -> dict[str, Any]:

@@ -5,7 +5,7 @@ import {
 } from "./api";
 import { Architecture } from "./Architecture";
 import { ChecksEditor, CustomChecksEditor } from "./Customize";
-import { RecentRuns } from "./History";
+import { HistoryModal, RecentRuns } from "./History";
 import { Report } from "./Report";
 import { Drawer, Segmented, SwitchRow } from "./ui";
 import type { About, CatalogCheck, CheckState, Connection, CustomCheck, HistoryRun, RunResult } from "./types";
@@ -22,11 +22,14 @@ const PRESETS: Preset[] = [
   { id: "minimal", label: "Quick", rules: "plumb", mode: "static" },
 ];
 
-function useHistory(): [HistoryRun[], () => void] {
+function useHistory(): { runs: HistoryRun[]; total: number; refresh: () => void } {
   const [runs, setRuns] = useState<HistoryRun[]>([]);
-  const refresh = () => { fetchHistory().then((d) => setRuns(d.runs)).catch(() => undefined); };
+  const [total, setTotal] = useState(0);
+  const refresh = () => {
+    fetchHistory({ limit: 3 }).then((d) => { setRuns(d.runs); setTotal(d.total); }).catch(() => undefined);
+  };
   useEffect(refresh, []);
-  return [runs, refresh];
+  return { runs, total, refresh };
 }
 
 export function App() {
@@ -132,7 +135,8 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [history, refreshHistory] = useHistory();
+  const { runs: history, total: historyTotal, refresh: refreshHistory } = useHistory();
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const sqlCatalog = useMemo(() => catalog.filter((c) => !c.family.startsWith("tableau")), [catalog]);
@@ -197,7 +201,10 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
         {error && <p className="error">{error}</p>}
       </div>
 
-      <RecentRuns runs={history} onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
+      <RecentRuns runs={history} total={historyTotal} onShowAll={() => setHistoryOpen(true)}
+        onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
+      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)}
+        onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
 
       {result ? <Report result={result} onSelectRun={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
         : <div className="empty">Ready when you are. Press <kbd>⌘↵</kbd> to run, or open Customize.</div>}
@@ -227,7 +234,8 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [history, refreshHistory] = useHistory();
+  const { runs: history, total: historyTotal, refresh: refreshHistory } = useHistory();
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const tabCatalog = useMemo(() => catalog.filter((c) => c.family.startsWith("tableau")), [catalog]);
   useEffect(() => {
@@ -269,7 +277,10 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
         {error && <p className="error">{error}</p>}
       </div>
 
-      <RecentRuns runs={history} onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
+      <RecentRuns runs={history} total={historyTotal} onShowAll={() => setHistoryOpen(true)}
+        onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
+      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)}
+        onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
 
       {result ? <Report result={result} onSelectRun={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
         : <div className="empty">Upload a workbook to run the Tableau checks.</div>}

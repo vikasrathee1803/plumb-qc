@@ -78,6 +78,20 @@ def test_run_detail_unknown_is_404():
     assert client.get("/api/run/nope").status_code == 404
 
 
+def test_history_limit_and_search():
+    probe = {"sql": "SELECT a FROM hist_search_tbl, u", "static_only": True}
+    for _ in range(4):
+        client.post("/api/check/sql", json=probe)
+    recent = client.get("/api/history?limit=3").json()
+    assert len(recent["runs"]) == 3
+    assert recent["total"] >= 4
+    found = client.get("/api/history?limit=1000&q=hist_search_tbl").json()
+    assert all(r["target"] == "hist_search_tbl" for r in found["runs"])
+    assert found["matched"] >= 4
+    # verdict search works too
+    assert client.get("/api/history?q=BLOCKED").json()["matched"] >= 1
+
+
 def test_trend_accumulates_per_target():
     # A unique table name makes a unique, isolatable build target.
     sql = "SELECT a FROM trend_probe_tbl, u"  # cartesian -> BLOCKED
