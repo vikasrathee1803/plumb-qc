@@ -11,11 +11,14 @@ dependency wheels) and a built web UI (web/ui/dist). Run `npm run build` in
 web/ui first if dist is missing.
 """
 
+import datetime
+import json
 import shutil
 import subprocess
 import sys
 import urllib.request
 import zipfile
+from email.parser import Parser
 from pathlib import Path
 
 PY_VERSION = "3.12.4"
@@ -105,6 +108,33 @@ def log(msg: str) -> None:
     print(f"[build] {msg}", flush=True)
 
 
+def write_sbom(site_packages: Path, dest: Path) -> int:
+    """Emit a CycloneDX SBOM of every bundled package, read from the installed
+    dist-info, so infosec can inventory and CVE-scan the portable build."""
+    components = []
+    for meta in sorted(site_packages.glob("*.dist-info/METADATA")):
+        fields = Parser().parsestr(meta.read_text(encoding="utf-8", errors="replace"))
+        name, version = fields.get("Name"), fields.get("Version")
+        if name and version:
+            components.append({
+                "type": "library",
+                "name": name,
+                "version": version,
+                "purl": f"pkg:pypi/{name}@{version}",
+            })
+    sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "metadata": {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "component": {"type": "application", "name": "plumb", "version": "0.1.0"},
+        },
+        "components": components,
+    }
+    dest.write_text(json.dumps(sbom, indent=2), encoding="utf-8")
+    return len(components)
+
+
 def fetch_embeddable() -> Path:
     CACHE.mkdir(parents=True, exist_ok=True)
     dest = CACHE / f"python-{PY_VERSION}-embed-amd64.zip"
@@ -167,13 +197,17 @@ def build() -> None:
         shutil.copyfile(init, target)
     log("copied application code, rules, and the built web UI")
 
-    # 5. Launcher and docs.
+    # 5. Supply-chain inventory (CycloneDX SBOM) for infosec/CVE scanning.
+    n = write_sbom(site_packages, BUNDLE / "SBOM.json")
+    log(f"wrote SBOM.json ({n} components)")
+
+    # 6. Launcher and docs.
     (BUNDLE / "run_plumb.py").write_text(RUN_PLUMB, encoding="utf-8")
     (BUNDLE / "run.bat").write_text(RUN_BAT, encoding="ascii", newline="")
     (BUNDLE / "README.txt").write_text(README, encoding="ascii", newline="")
     (BUNDLE / "data" / "reports" / "web").mkdir(parents=True)
 
-    # 6. Zip it.
+    # 7. Zip it.
     OUT_ZIP.parent.mkdir(parents=True, exist_ok=True)
     if OUT_ZIP.exists():
         OUT_ZIP.unlink()

@@ -1,13 +1,15 @@
 """Web backend: every endpoint returns the same RunResult contract the CLI
 produces, computed by the same engine. No verdict logic is reimplemented."""
 
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from web.api.app import create_app
 
-client = TestClient(create_app())
+_TOKEN = os.environ["PLUMB_API_TOKEN"]
+client = TestClient(create_app(), headers={"X-Plumb-Token": _TOKEN})
 TABLEAU_FIXTURE = Path(__file__).parent / "fixtures" / "tableau" / "sales_dashboard.twb"
 
 
@@ -15,6 +17,37 @@ def test_health():
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+def test_api_requires_token():
+    """Data endpoints reject a missing or wrong token; health stays open."""
+    noauth = TestClient(create_app())  # no token header
+    assert noauth.get("/api/health").status_code == 200  # health is open
+    assert noauth.get("/api/profiles").status_code == 401
+    assert noauth.post("/api/check/sql", json={"sql": "SELECT 1"}).status_code == 401
+    bad = TestClient(create_app(), headers={"X-Plumb-Token": "wrong"})
+    assert bad.get("/api/profiles").status_code == 401
+
+
+def test_spa_shell_sets_the_token_cookie():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "plumb_token" in r.cookies or "set-cookie" in {k.lower() for k in r.headers}
+
+
+def test_web_run_is_audited():
+    import json
+
+    run = client.post(
+        "/api/check/sql", json={"sql": "SELECT a FROM audit_probe_tbl, u", "static_only": True}
+    ).json()
+    audit_path = Path(os.environ["PLUMB_AUDIT_FILE"])
+    assert audit_path.exists()
+    records = [json.loads(ln) for ln in audit_path.read_text().splitlines() if ln.strip()]
+    mine = next(r for r in records if r["run_id"] == run["run_id"])
+    assert mine["verdict"] == "BLOCKED"
+    assert mine["target_name"] == "audit_probe_tbl"
+    assert mine["user"] and "timestamp" in mine
 
 
 def test_profiles_lists_shipped_profiles():
@@ -322,7 +355,7 @@ def test_report_link_survives_a_restart():
     run = client.post(
         "/api/check/sql", json={"sql": "SELECT a FROM t, u", "static_only": True}
     ).json()
-    fresh = TestClient(create_app())  # new process: in-memory _REPORTS is empty
+    fresh = TestClient(create_app(), headers={"X-Plumb-Token": _TOKEN})
     r = fresh.get(f"/api/report/{run['run_id']}.html")
     assert r.status_code == 200
     assert "BLOCKED" in r.text

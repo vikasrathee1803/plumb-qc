@@ -101,6 +101,11 @@ export function App() {
         <span className={`conn ${conn.configured ? "live" : ""}`}>
           <span className="led" />{conn.configured ? `${conn.account}` : "no connection"}
         </span>
+        {conn.privileged_role && (
+          <span className="role-warn" title={`Connected with the administrative role ${conn.role}. Use a dedicated SELECT-only role (scripts/snowflake_setup.sql).`}>
+            ⚠ {conn.role}
+          </span>
+        )}
         <button className="iconbtn" title="How Plumb works" aria-label="How Plumb works" onClick={() => setArchOpen(true)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">

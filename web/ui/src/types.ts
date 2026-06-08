@@ -55,6 +55,8 @@ export interface Connection {
   account?: string;
   warehouse?: string;
   role?: string;
+  user?: string;
+  privileged_role?: boolean;
 }
 
 export interface About {

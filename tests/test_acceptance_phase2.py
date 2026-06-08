@@ -4,6 +4,7 @@ Maps to PLUMB_SPEC.md "Acceptance criteria / Phase 2".
 """
 
 import json
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -19,7 +20,7 @@ from tests._fakes import RouteSession
 from web.api.app import create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tableau" / "sales_dashboard.twb"
-client = TestClient(create_app())
+client = TestClient(create_app(), headers={"X-Plumb-Token": os.environ["PLUMB_API_TOKEN"]})
 
 
 def test_p2ac1_tableau_catalog_with_lod_and_custom_sql():

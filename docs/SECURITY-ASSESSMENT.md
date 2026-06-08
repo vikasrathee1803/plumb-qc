@@ -7,6 +7,32 @@ This is a grounded review: every finding cites the code it is based on. It
 covers data flow, secrets, access control, auditability, supply chain, and
 data at rest, and maps findings to SOX, PCI-DSS, SOC 2, and GDPR/CCPA concerns.
 
+## 0. Remediation status (2026-06-08)
+
+The prioritized set has been implemented in this revision:
+
+- H-1 (API auth): every /api/* endpoint except health now requires a
+  per-launch bearer token, delivered to the browser as a SameSite=Strict,
+  HttpOnly cookie (which also blocks CSRF) and accepted as an X-Plumb-Token
+  header for scripts. The CLI warns on any non-loopback bind. Done.
+- H-2 (audit web runs) and M-2 (central sink): every web run now writes an
+  audit record; the audit path is overridable with PLUMB_AUDIT_FILE so it can
+  point at a SIEM-monitored location. Done (forwarding to the SIEM is an
+  operational deployment step).
+- M-1 (content PII): redaction now also fires on value content (card number
+  via Luhn, SSN, email, IBAN), not just column names; the finance profile is
+  already aggregate-only. Done.
+- L-2 (least-privilege role): scripts/snowflake_setup.sql provisions a
+  SELECT-only PLUMB_QC role and a dedicated PLUMB_WH; Plumb warns (CLI and UI)
+  when a connection uses an administrative role. Done.
+- M-3 (SBOM): the portable build now emits a CycloneDX SBOM.json for CVE
+  scanning. Hash-pinned installs and a CI CVE scan remain recommended (below).
+- M-4 (data at rest): guidance below; full-disk encryption remains a
+  deployment control, and the finance profile persists no row samples.
+
+The remaining work is operational (SIEM wiring, hash-pinned CI, disk-encryption
+policy), not code.
+
 ## 1. Overall posture
 
 Plumb is local-first and read-only by design, and the architecture makes the

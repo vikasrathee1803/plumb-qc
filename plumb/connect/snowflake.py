@@ -35,7 +35,19 @@ from plumb.config.models import ConnectionProfile
 
 QUERY_TAG_PREFIX = "plumb_qc"
 
+# Administrative roles that should never run a read-only QC tool. Plumb warns
+# when a connection profile uses one; the right setup is a dedicated SELECT-only
+# role (see scripts/snowflake_setup.sql).
+ADMIN_ROLES = frozenset({"ACCOUNTADMIN", "SECURITYADMIN", "SYSADMIN", "ORGADMIN"})
+
 KEYRING_SERVICE = "plumb"
+
+
+def is_privileged_role(role: str | None) -> bool:
+    """True when the role is an administrative (write-capable) role."""
+    if not role:
+        return False
+    return role.strip().strip('"').upper() in ADMIN_ROLES
 ENV_PRIVATE_KEY_PASSPHRASE = "PLUMB_PRIVATE_KEY_PASSPHRASE"
 ENV_OAUTH_TOKEN = "PLUMB_OAUTH_TOKEN"
 

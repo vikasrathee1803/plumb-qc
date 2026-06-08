@@ -30,6 +30,31 @@ def test_redaction_off_keeps_values() -> None:
     assert out[0]["CUSTOMER_EMAIL"] == "a@x.com"
 
 
+def test_content_redaction_catches_pii_in_unnamed_columns() -> None:
+    # No column-name patterns at all: content detectors must still fire.
+    rows = [
+        {
+            "MEMO": "ref 4111 1111 1111 1111 paid",  # a Luhn-valid card number
+            "NOTE": "call me at a.person@bank.com",  # an email
+            "TAXID": "123-45-6789",  # an SSN
+            "IBAN_RAW": "GB82WEST12345698765432",  # an IBAN
+            "AMOUNT": 4242,  # not PII, even though it is digits
+        }
+    ]
+    out = prepare_evidence_rows(rows, sample_cap=10, redact=True, patterns=[])
+    assert out[0]["MEMO"] == REDACTED
+    assert out[0]["NOTE"] == REDACTED
+    assert out[0]["TAXID"] == REDACTED
+    assert out[0]["IBAN_RAW"] == REDACTED
+    assert out[0]["AMOUNT"] == 4242  # plain numbers are not redacted
+
+
+def test_content_redaction_respects_redact_flag() -> None:
+    rows = [{"MEMO": "card 4111 1111 1111 1111"}]
+    out = prepare_evidence_rows(rows, sample_cap=10, redact=False, patterns=[])
+    assert out[0]["MEMO"] != REDACTED
+
+
 def test_aggregate_only_suppresses_all_rows() -> None:
     out = prepare_evidence_rows(
         ROWS, sample_cap=10, redact=True, patterns=[r"email"], aggregate_only=True

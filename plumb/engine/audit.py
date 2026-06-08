@@ -1,20 +1,23 @@
 """Local audit trail: one JSON line per run.
 
 Every run appends who, when, target, ruleset version, and verdict to a
-local JSON-lines file. This is the local audit sink; Phase 2 may add a
-central sink behind the same write_audit_record call.
+JSON-lines file. The location is overridable with PLUMB_AUDIT_FILE so an
+enterprise can point it at a monitored path that ships to a central SIEM
+(the recommended way to make the trail centralized and tamper-evident); the
+default is local. No secret or evidence value is ever recorded here.
 """
 
 from __future__ import annotations
 
 import getpass
 import json
+import os
 from pathlib import Path
 
 from plumb.engine.models import RunResult, utc_now
 
 AUDIT_HOME = Path.home() / ".plumb"
-AUDIT_FILE = AUDIT_HOME / "audit.jsonl"
+AUDIT_FILE = Path(os.environ.get("PLUMB_AUDIT_FILE") or (AUDIT_HOME / "audit.jsonl"))
 
 
 def audit_record(result: RunResult, *, user: str | None = None) -> dict[str, object]:

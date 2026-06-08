@@ -38,6 +38,7 @@ from plumb.connect.snowflake import (
     ReadOnlyViolation,
     SnowflakeConnectError,
     SnowflakeSession,
+    is_privileged_role,
 )
 from plumb.engine.audit import write_audit_record
 from plumb.engine.models import RunResult, Status, Target, Verdict
@@ -195,7 +196,18 @@ def web(
         from web.api.app import app as web_app
     except ImportError as exc:
         raise _fail(f"web extras not available: {exc}") from exc
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        err_console.print(
+            f"[yellow]warning:[/yellow] binding to {host} exposes the API beyond this "
+            "machine. The API requires a bearer token, but 127.0.0.1 is strongly preferred."
+        )
     console.print(f"Plumb web UI on [bold]http://{host}:{port}[/bold]  (ctrl-c to stop)")
+    token = getattr(web_app.state, "api_token", None)
+    if token:
+        console.print(
+            f"[dim]API token (sent to your browser automatically; use it for scripts): "
+            f"{token}[/dim]"
+        )
     uvicorn.run(web_app, host=host, port=port, log_level="warning")
 
 
@@ -438,6 +450,12 @@ def _open_session(ruleset: Ruleset, run_id: str) -> SnowflakeSession:
             f"{exc}\nrun 'plumb init' then edit {CONNECTION_FILE}, "
             f"or use --static-only to run without Snowflake"
         ) from exc
+    if is_privileged_role(connection.role):
+        err_console.print(
+            f"[yellow]warning:[/yellow] connecting with the administrative role "
+            f"{connection.role!r}. Plumb is read-only, but a dedicated SELECT-only "
+            f"role is the right control. See scripts/snowflake_setup.sql."
+        )
     session = SnowflakeSession(
         connection,
         run_id=run_id,

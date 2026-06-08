@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -39,6 +40,7 @@ from plumb.connect.snowflake import (
     AuthConfigError,
     SnowflakeConnectError,
     SnowflakeSession,
+    is_privileged_role,
 )
 from plumb.engine.catalog import catalog as check_catalog
 from plumb.engine.lineage import build_lineage
@@ -113,8 +115,12 @@ def _record(result: RunResult) -> None:
         )
         with HISTORY_FILE.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
+        # Audit every web run (who, when, target, ruleset version, verdict).
+        from plumb.engine.audit import write_audit_record
+
+        write_audit_record(result)
     except OSError:
-        pass  # an unwritable reports dir must never break a run
+        pass  # an unwritable reports/audit dir must never break a run
     _HISTORY.insert(0, entry)
     del _HISTORY[_HISTORY_MEM_CAP:]
 
@@ -308,6 +314,31 @@ def _maybe_explain(
 def create_app() -> FastAPI:
     app = FastAPI(title="Plumb", version=__version__)
 
+    # Per-launch bearer token. The browser receives it as a SameSite=Strict,
+    # HttpOnly cookie on the SPA shell and sends it automatically on same-origin
+    # fetches; programmatic clients send the X-Plumb-Token header. This stops
+    # another user on a shared host (or a malicious web page) from driving the
+    # local API, and the SameSite cookie blocks CSRF. Override in automation
+    # with PLUMB_API_TOKEN.
+    api_token = os.environ.get("PLUMB_API_TOKEN") or secrets.token_urlsafe(24)
+    app.state.api_token = api_token
+    _OPEN_PATHS = {"/api/health"}
+
+    @app.middleware("http")
+    async def _require_token(request: Request, call_next: Any) -> Any:
+        path = request.url.path
+        if path.startswith("/api/") and path not in _OPEN_PATHS:
+            presented = request.headers.get("X-Plumb-Token") or request.cookies.get("plumb_token")
+            if not presented or not secrets.compare_digest(presented, api_token):
+                return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        response = await call_next(request)
+        # Hand the token to the browser when it loads the SPA shell.
+        if path == "/" or response.headers.get("content-type", "").startswith("text/html"):
+            response.set_cookie(
+                "plumb_token", api_token, httponly=True, samesite="strict", path="/"
+            )
+        return response
+
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "version": __version__}
@@ -408,6 +439,7 @@ def create_app() -> FastAPI:
             "warehouse": profile.warehouse,
             "role": profile.role,
             "user": profile.user,
+            "privileged_role": is_privileged_role(profile.role),
         }
 
     @app.post("/api/check/sql")
