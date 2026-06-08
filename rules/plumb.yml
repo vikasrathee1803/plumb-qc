@@ -48,6 +48,8 @@ checks:
     enabled: true
   - id: S-STAT-010
     enabled: true
+  - id: S-STAT-011
+    enabled: true
   - id: S-META-001
     enabled: true
   - id: S-META-002
@@ -80,6 +82,14 @@ checks:
     enabled: true
   - id: D-ADD-001
     enabled: true
+  - id: D-BLANK-001
+    enabled: false
+    params: { columns: [] }
+  - id: D-POS-001
+    enabled: false
+    params: { columns: [] }
+  - id: D-DISTINCT-001
+    enabled: false
   - id: R-DIFF-001
     enabled: true
   - id: R-AGG-001

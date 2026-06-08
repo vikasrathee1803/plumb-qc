@@ -79,6 +79,40 @@ def _null_alias(column: str) -> str:
     return f"__PLUMB_NULLS_{safe}"
 
 
+def _blank_alias(column: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in column).upper()
+    return f"__PLUMB_BLANK_{safe}"
+
+
+def _neg_alias(column: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in column).upper()
+    return f"__PLUMB_NEG_{safe}"
+
+
+def blank_count_query(sql: str, columns: list[str]) -> str:
+    total = "COUNT(*) AS __PLUMB_TOTAL"
+    terms = ", ".join(
+        f"SUM(CASE WHEN TRIM({_quote(c)}) = '' THEN 1 ELSE 0 END) AS {_blank_alias(c)}"
+        for c in columns
+    )
+    body = f"SELECT {total}, {terms}\nFROM {TARGET_CTE}"
+    return wrap_target(sql, body)
+
+
+def negative_count_query(sql: str, columns: list[str]) -> str:
+    terms = ", ".join(
+        f"SUM(CASE WHEN {_quote(c)} < 0 THEN 1 ELSE 0 END) AS {_neg_alias(c)}"
+        for c in columns
+    )
+    body = f"SELECT {terms}\nFROM {TARGET_CTE}"
+    return wrap_target(sql, body)
+
+
+def distinct_count_query(sql: str, column: str) -> str:
+    body = f"SELECT COUNT(DISTINCT {_quote(column)}) AS __PLUMB_DISTINCT\nFROM {TARGET_CTE}"
+    return wrap_target(sql, body)
+
+
 def row_count_query(sql: str) -> str:
     return wrap_target(sql, f"SELECT COUNT(*) AS __PLUMB_ROWS\nFROM {TARGET_CTE}")
 

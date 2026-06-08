@@ -227,6 +227,151 @@ def d_null_002(ctx: CheckContext, params: dict):
 
 
 @register_check(
+    check_id="D-BLANK-001",
+    name="Blank (empty or whitespace) string rate within threshold",
+    family=CheckFamily.ASSERTIONS,
+    default_severity=Severity.MEDIUM,
+    execution_type=ExecutionType.EXECUTION,
+)
+def d_blank_001(ctx: CheckContext, params: dict):
+    guard = _guard(ctx, "D-BLANK-001")
+    if guard is not None:
+        return guard
+    columns = params.get("columns") or []
+    if not columns:
+        return build_result(
+            ctx, "D-BLANK-001", Status.SKIP, observed="no columns declared in params"
+        )
+    threshold = float(params.get("threshold", 0.0))
+    try:
+        query = _sql.blank_count_query(ctx.sql_text, columns)
+        result = ctx.session.execute(query)
+    except SqlParseError as exc:
+        return error(ctx, "D-BLANK-001", f"could not build query: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return error(ctx, "D-BLANK-001", f"blank count query failed: {exc}")
+
+    total = int(_scalar(result.rows, "__PLUMB_TOTAL") or 0)
+    if total == 0:
+        return build_result(
+            ctx, "D-BLANK-001", Status.WARN, observed="target is empty", query=query
+        )
+    breaches = {}
+    for col in columns:
+        blanks = int(result.rows[0][_sql._blank_alias(col)])
+        rate = blanks / total
+        if rate > threshold:
+            breaches[col] = rate
+    if breaches:
+        detail = ", ".join(f"{k}={v:.4f}" for k, v in breaches.items())
+        return build_result(
+            ctx,
+            "D-BLANK-001",
+            Status.FAIL,
+            observed=f"blank rate above {threshold}: {detail}",
+            expected=f"blank rate <= {threshold}",
+            query=query,
+            remediation="Empty strings often masquerade as data; trim and validate at the source.",
+        )
+    return build_result(
+        ctx, "D-BLANK-001", Status.PASS, observed=f"blank rates within {threshold}", query=query
+    )
+
+
+@register_check(
+    check_id="D-POS-001",
+    name="Declared numeric columns are non-negative",
+    family=CheckFamily.ASSERTIONS,
+    default_severity=Severity.HIGH,
+    execution_type=ExecutionType.EXECUTION,
+)
+def d_pos_001(ctx: CheckContext, params: dict):
+    guard = _guard(ctx, "D-POS-001")
+    if guard is not None:
+        return guard
+    columns = params.get("columns") or []
+    if not columns:
+        return build_result(
+            ctx, "D-POS-001", Status.SKIP, observed="no columns declared in params"
+        )
+    try:
+        query = _sql.negative_count_query(ctx.sql_text, columns)
+        result = ctx.session.execute(query)
+    except SqlParseError as exc:
+        return error(ctx, "D-POS-001", f"could not build query: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return error(ctx, "D-POS-001", f"negative count query failed: {exc}")
+
+    offenders = {
+        col: int(result.rows[0][_sql._neg_alias(col)])
+        for col in columns
+        if result.rows and int(result.rows[0][_sql._neg_alias(col)]) > 0
+    }
+    if offenders:
+        detail = ", ".join(f"{k}={v}" for k, v in offenders.items())
+        return build_result(
+            ctx,
+            "D-POS-001",
+            Status.FAIL,
+            observed=f"negative values found: {detail}",
+            expected="no negative values in these columns",
+            query=query,
+            remediation="Negative amounts or counts usually signal a sign error or bad join.",
+        )
+    return build_result(
+        ctx, "D-POS-001", Status.PASS, observed=f"no negatives in {columns}", query=query
+    )
+
+
+@register_check(
+    check_id="D-DISTINCT-001",
+    name="Distinct value count within expected bounds",
+    family=CheckFamily.ASSERTIONS,
+    default_severity=Severity.MEDIUM,
+    execution_type=ExecutionType.EXECUTION,
+)
+def d_distinct_001(ctx: CheckContext, params: dict):
+    guard = _guard(ctx, "D-DISTINCT-001")
+    if guard is not None:
+        return guard
+    column = params.get("column")
+    low = params.get("min")
+    high = params.get("max")
+    if not column or (low is None and high is None):
+        return build_result(
+            ctx, "D-DISTINCT-001", Status.SKIP, observed="needs column and min and/or max"
+        )
+    try:
+        query = _sql.distinct_count_query(ctx.sql_text, column)
+        result = ctx.session.execute(query)
+    except SqlParseError as exc:
+        return error(ctx, "D-DISTINCT-001", f"could not build query: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return error(ctx, "D-DISTINCT-001", f"distinct count query failed: {exc}")
+
+    distinct = int(_scalar(result.rows, "__PLUMB_DISTINCT") or 0)
+    low_bad = low is not None and distinct < int(low)
+    high_bad = high is not None and distinct > int(high)
+    if low_bad or high_bad:
+        return build_result(
+            ctx,
+            "D-DISTINCT-001",
+            Status.FAIL,
+            observed=f"{distinct} distinct values in {column}",
+            expected=f"between {low} and {high}",
+            query=query,
+            remediation="Distinct cardinality is off; check for a grain change or a bad filter.",
+        )
+    return build_result(
+        ctx,
+        "D-DISTINCT-001",
+        Status.PASS,
+        observed=f"{distinct} distinct values in {column}",
+        query=query,
+    )
+
+
+@register_check(
     check_id="D-RI-001",
     name="Referential integrity: no orphan foreign keys",
     family=CheckFamily.ASSERTIONS,

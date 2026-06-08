@@ -389,6 +389,45 @@ def s_stat_010(ctx: CheckContext, params: dict):
     return build_result(ctx, "S-STAT-010", Status.PASS, observed="no DISTINCT-over-join")
 
 
+@register_check(
+    check_id="S-STAT-011",
+    name="ORDER BY in a subquery or CTE (non-functional sort)",
+    family=CheckFamily.STATIC,
+    default_severity=Severity.LOW,
+    execution_type=ExecutionType.STATIC,
+)
+def s_stat_011(ctx: CheckContext, params: dict):
+    try:
+        tree = _tree(ctx)
+    except SqlParseError as exc:
+        return error(ctx, "S-STAT-011", f"could not parse SQL: {exc}")
+    if tree is None:
+        return build_result(ctx, "S-STAT-011", Status.SKIP, observed="no SQL provided")
+    flagged = 0
+    for order in tree.find_all(exp.Order):
+        # A sort inside a window (OVER ... ORDER BY) is functional; skip it.
+        if order.find_ancestor(exp.Window) is not None:
+            continue
+        # A sort paired with LIMIT (top-N) inside a subquery is intentional.
+        enclosing = order.find_ancestor(exp.Subquery, exp.CTE)
+        if enclosing is None:
+            continue
+        parent_select = order.find_ancestor(exp.Select)
+        if parent_select is not None and parent_select.args.get("limit") is not None:
+            continue
+        flagged += 1
+    if flagged:
+        return build_result(
+            ctx,
+            "S-STAT-011",
+            Status.WARN,
+            observed=f"{flagged} ORDER BY inside a subquery or CTE without LIMIT",
+            expected="sort only in the outermost query",
+            remediation="A subquery sort is discarded by the optimizer; sort in the final SELECT.",
+        )
+    return build_result(ctx, "S-STAT-011", Status.PASS, observed="no nested sorts")
+
+
 def _is_column(node: exp.Expression | None) -> bool:
     return isinstance(node, exp.Column)
 
