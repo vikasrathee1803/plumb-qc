@@ -209,8 +209,24 @@ def create_app() -> FastAPI:
     async def check_tableau(
         workbook: UploadFile = File(...),
         profile: str | None = Form(None),
+        checks: str | None = Form(None),
     ) -> dict[str, Any]:
         ruleset = _resolve_ruleset(profile)
+        if checks:
+            import json
+
+            try:
+                parsed_checks = [CheckConfig.model_validate(c) for c in json.loads(checks)]
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=400, detail=f"bad checks payload: {exc}") from exc
+            ruleset = ruleset.model_copy(
+                update={
+                    "checks": [
+                        CheckSpec(id=c.id, enabled=c.enabled, params=c.params)
+                        for c in parsed_checks
+                    ]
+                }
+            )
         suffix = Path(workbook.filename or "wb.twb").suffix or ".twb"
         data = await workbook.read()
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:

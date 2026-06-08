@@ -34,10 +34,15 @@ export async function runSql(body: {
   return j as RunResult;
 }
 
-export async function runTableau(file: File, profile: string | null): Promise<RunResult> {
+export async function runTableau(
+  file: File,
+  profile: string | null,
+  checks: CheckState[]
+): Promise<RunResult> {
   const form = new FormData();
   form.append("workbook", file);
   if (profile) form.append("profile", profile);
+  if (checks.length) form.append("checks", JSON.stringify(checks));
   const r = await fetch("/api/check/tableau", { method: "POST", body: form });
   const j = await r.json();
   if (!r.ok) throw new Error(j.detail ?? "check failed");

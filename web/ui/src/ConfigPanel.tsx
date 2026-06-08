@@ -1,7 +1,18 @@
 import { useState } from "react";
 import type { CatalogCheck, CheckState, ParamHint } from "./types";
 
-const FAMILY_ORDER = ["static", "metadata", "assertions", "regression", "performance"];
+const FAMILY_ORDER = [
+  "static", "metadata", "assertions", "regression", "performance", "tableau_static",
+];
+
+const FAMILY_LABEL: Record<string, string> = {
+  static: "Static analysis",
+  metadata: "Schema & metadata",
+  assertions: "Data assertions",
+  regression: "Regression vs baseline",
+  performance: "Performance & cost",
+  tableau_static: "Tableau",
+};
 
 export function paramToInput(value: unknown, hint: ParamHint): string {
   if (value === undefined || value === null) return "";
@@ -23,15 +34,17 @@ export function ConfigPanel({
   catalog,
   state,
   setState,
+  startOpen = false,
 }: {
   catalog: CatalogCheck[];
   state: Record<string, CheckState>;
   setState: (s: Record<string, CheckState>) => void;
+  startOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen);
 
-  const sqlCatalog = catalog.filter((c) => !c.family.startsWith("tableau"));
-  const enabledCount = Object.values(state).filter((s) => s.enabled).length;
+  const ids = new Set(catalog.map((c) => c.id));
+  const enabledCount = Object.values(state).filter((s) => s.enabled && ids.has(s.id)).length;
 
   function toggle(id: string, enabled: boolean) {
     setState({ ...state, [id]: { ...state[id], id, enabled } });
@@ -46,14 +59,14 @@ export function ConfigPanel({
   }
   function setAll(enabled: boolean) {
     const next: Record<string, CheckState> = {};
-    for (const c of sqlCatalog) next[c.id] = { ...(state[c.id] ?? { id: c.id, params: {} }), id: c.id, enabled };
+    for (const c of catalog) next[c.id] = { ...(state[c.id] ?? { id: c.id, params: {} }), id: c.id, enabled };
     setState({ ...state, ...next });
   }
 
   const byFamily: Record<string, CatalogCheck[]> = {};
-  for (const c of sqlCatalog) (byFamily[c.family] ??= []).push(c);
+  for (const c of catalog) (byFamily[c.family] ??= []).push(c);
   const families = Object.keys(byFamily).sort(
-    (a, b) => (FAMILY_ORDER.indexOf(a) + 99) % 99 - ((FAMILY_ORDER.indexOf(b) + 99) % 99)
+    (a, b) => FAMILY_ORDER.indexOf(a) - FAMILY_ORDER.indexOf(b)
   );
 
   return (
@@ -61,19 +74,19 @@ export function ConfigPanel({
       <div className="section-head" onClick={() => setOpen(!open)}>
         <span className={`caret ${open ? "open" : ""}`}>▸</span>
         <h3>Configure checks</h3>
-        <span className="muted">{enabledCount} of {sqlCatalog.length} enabled</span>
+        <span className="muted">{enabledCount} of {catalog.length} on</span>
       </div>
 
       {open && (
         <>
           <div className="cfg-toolbar">
-            <button className="btn-ghost" onClick={() => setAll(true)}>Enable all</button>
-            <button className="btn-ghost" onClick={() => setAll(false)}>Disable all</button>
-            <span className="muted">toggle checks and edit their params; what you see runs</span>
+            <button className="btn-ghost" onClick={() => setAll(true)}>Turn all on</button>
+            <button className="btn-ghost" onClick={() => setAll(false)}>Turn all off</button>
+            <span className="muted">Switch any check on or off and edit its settings. Whatever is on here is what runs.</span>
           </div>
           {families.map((fam) => (
             <div className="cfg-family" key={fam}>
-              <div className="fam-label">{fam}</div>
+              <div className="fam-label">{FAMILY_LABEL[fam] ?? fam}</div>
               {byFamily[fam].map((c) => {
                 const st = state[c.id] ?? { id: c.id, enabled: false, params: {} };
                 return (

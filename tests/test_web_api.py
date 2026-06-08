@@ -148,6 +148,21 @@ def test_unknown_profile_is_400():
     assert r.status_code == 400
 
 
+def test_tableau_checks_override_disables_a_check():
+    """The Tableau tab can disable specific T-* checks."""
+    import json
+
+    with TABLEAU_FIXTURE.open("rb") as fh:
+        r = client.post(
+            "/api/check/tableau",
+            files={"workbook": ("sales_dashboard.twb", fh, "application/xml")},
+            data={"checks": json.dumps([{"id": "T-SRC-001", "enabled": True, "params": {}}])},
+        )
+    assert r.status_code == 200
+    ids = [c["id"] for c in r.json()["checks"]]
+    assert ids == ["T-SRC-001"]  # only the one we enabled ran
+
+
 def test_tableau_upload_runs_catalog():
     with TABLEAU_FIXTURE.open("rb") as fh:
         r = client.post(

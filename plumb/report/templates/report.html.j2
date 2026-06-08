@@ -5,127 +5,170 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Plumb report: {{ result.target.name }}</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0; background: #f5f6f8; color: #1c1e21; }
-  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px; }
-  header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-  h1 { font-size: 20px; margin: 0; }
-  .meta { color: #555; font-size: 13px; }
-  .verdict { font-size: 22px; font-weight: 700; padding: 10px 18px; border-radius: 8px; color: #fff; }
-  .v-BLOCKED { background: #b3261e; }
-  .v-REVIEW { background: #c77700; }
-  .v-READY_WITH_NOTES { background: #3367d6; }
-  .v-READY { background: #1e7e34; }
-  .card { background: #fff; border: 1px solid #e2e4e8; border-radius: 8px; padding: 16px; margin: 16px 0; }
-  .counts span { display: inline-block; margin-right: 14px; font-size: 14px; }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
-  .s-FAIL { background: #fde8e6; color: #b3261e; }
-  .s-PASS { background: #e6f4ea; color: #1e7e34; }
-  .s-WARN { background: #fef3e0; color: #c77700; }
-  .s-SKIP { background: #eceff1; color: #555; }
-  .s-ERROR { background: #efe1fb; color: #6a1b9a; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; }
-  th { color: #555; font-weight: 600; }
-  .sev { font-size: 11px; color: #888; }
-  details { margin-top: 6px; }
-  summary { cursor: pointer; color: #3367d6; font-size: 12px; }
-  pre { background: #f0f1f3; padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
-  .gap { color: #b3261e; font-weight: 600; }
-  .ran { color: #1e7e34; }
-  footer { color: #888; font-size: 12px; text-align: center; padding: 16px; }
-  .evidence th { background: #fafbfc; }
+  :root {
+    color-scheme: light dark;
+    --bg-0:#07080c; --bg-1:#0b0d13; --bg-2:#0f1117; --bg-3:#14161f; --bg-4:#1a1d28;
+    --line-1:#1d2030; --line-2:#2c3046;
+    --fg-1:#ecedf3; --fg-2:#c4c8d3; --fg-3:#a0a6b5; --fg-4:#757a8c;
+    --ai-1:#7c6bff; --ai-2:#a78bff; --ai-soft:rgba(124,107,255,0.14); --ai-edge:rgba(124,107,255,0.35);
+    --pos:#3ddc97; --pos-soft:rgba(61,220,151,0.12);
+    --neg:#ff6b7d; --neg-soft:rgba(255,107,125,0.12);
+    --warn:#f5a524; --warn-soft:rgba(245,165,36,0.12);
+    --info:#5aa9ff;
+    --radius:14px;
+    --font-sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --font-mono:"Geist Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg-0:#f8f9fb; --bg-1:#ffffff; --bg-2:#fafbfd; --bg-3:#f3f5f9; --bg-4:#e9edf3;
+      --line-1:#e7e9ef; --line-2:#d4d8e0;
+      --fg-1:#0f1117; --fg-2:#2c3046; --fg-3:#5a5f6e; --fg-4:#8a8f9c;
+      --ai-1:#6b58f0; --ai-2:#5b48d6; --ai-soft:rgba(107,88,240,0.08); --ai-edge:rgba(107,88,240,0.25);
+      --pos:#18a065; --pos-soft:rgba(24,160,101,0.10);
+      --neg:#d63b50; --neg-soft:rgba(214,59,80,0.10);
+      --warn:#c47d15; --warn-soft:rgba(214,132,29,0.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:var(--font-sans); background:var(--bg-0); color:var(--fg-1);
+    font-size:14px; line-height:1.5;
+    background-image: radial-gradient(900px 500px at 80% -10%, var(--ai-soft), transparent 60%); }
+  .shell { max-width:1000px; margin:0 auto; padding:28px 24px 60px; }
+  .top { display:flex; align-items:baseline; gap:10px; margin-bottom:18px; }
+  .logo { font-size:19px; font-weight:700; letter-spacing:-0.02em; }
+  .logo .dot { color:var(--ai-1); }
+  .top .tag { color:var(--fg-4); font-size:12px; }
+  .card { background:var(--bg-1); border:1px solid var(--line-1); border-radius:var(--radius);
+    padding:18px; margin-bottom:16px; }
+  .hero { display:flex; align-items:center; gap:18px; padding:24px; border-radius:var(--radius);
+    border:1px solid var(--line-2); }
+  .v-BLOCKED { --vc:var(--neg); } .v-REVIEW { --vc:var(--warn); }
+  .v-READY_WITH_NOTES { --vc:var(--info); } .v-READY { --vc:var(--pos); }
+  .hero { background:linear-gradient(120deg, color-mix(in srgb, var(--vc) 12%, var(--bg-1)), var(--bg-1) 70%); }
+  .hero .dot { width:14px; height:14px; border-radius:50%; background:var(--vc); box-shadow:0 0 14px var(--vc); }
+  .hero .vbig { font-size:30px; font-weight:800; letter-spacing:-0.02em; color:var(--vc); }
+  .hero .vmeta { color:var(--fg-3); font-size:13px; } .hero .vmeta b { color:var(--fg-1); }
+  .hero .cap { margin-left:auto; max-width:340px; text-align:right; color:var(--fg-3); font-size:12px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:10px; margin-top:16px; }
+  .tile { background:var(--bg-2); border:1px solid var(--line-1); border-radius:10px; padding:12px; text-align:center; }
+  .tile .n { font-size:22px; font-weight:700; } .tile .l { font-size:11px; color:var(--fg-4); text-transform:uppercase; letter-spacing:0.05em; }
+  .t-pass .n { color:var(--pos); } .t-fail .n { color:var(--neg); } .t-warn .n { color:var(--warn); }
+  .t-skip .n { color:var(--fg-4); } .t-err .n { color:var(--ai-2); }
+  h4 { margin:0 0 8px; font-size:13px; }
+  .fam-pills { display:flex; gap:6px; flex-wrap:wrap; }
+  .fam-pill { font-size:11px; padding:4px 10px; border-radius:999px; background:var(--pos-soft); color:var(--pos);
+    border:1px solid color-mix(in srgb, var(--pos) 25%, transparent); }
+  .gaps { list-style:none; padding:0; margin:10px 0 0; }
+  .gaps li { font-size:12px; padding:7px 10px; border-left:2px solid var(--warn); background:var(--warn-soft);
+    border-radius:0 6px 6px 0; margin-bottom:6px; } .gaps li b { color:var(--fg-1); }
+  details.crow { border:1px solid var(--line-1); border-radius:10px; margin-bottom:8px; background:var(--bg-2); }
+  details.crow > summary { display:flex; align-items:center; gap:12px; padding:11px 14px; cursor:pointer; list-style:none; }
+  details.crow > summary::-webkit-details-marker { display:none; }
+  .cid { font-family:var(--font-mono); font-size:12px; font-weight:600; min-width:104px; }
+  .cname { color:var(--fg-2); font-size:13px; flex:1; }
+  .sev { font-size:10px; color:var(--fg-4); border:1px solid var(--line-2); padding:1px 6px; border-radius:4px;
+    text-transform:uppercase; letter-spacing:0.04em; }
+  .pill { font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; min-width:52px; text-align:center; }
+  .p-PASS { background:var(--pos-soft); color:var(--pos); } .p-FAIL { background:var(--neg-soft); color:var(--neg); }
+  .p-WARN { background:var(--warn-soft); color:var(--warn); } .p-SKIP { background:var(--bg-4); color:var(--fg-4); }
+  .p-ERROR { background:var(--ai-soft); color:var(--ai-2); }
+  .detail { padding:2px 14px 14px; border-top:1px solid var(--line-1); }
+  .kv { display:grid; grid-template-columns:92px 1fr; gap:6px 12px; font-size:12.5px; margin-top:10px; }
+  .kv .k { color:var(--fg-4); }
+  .dh { font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--fg-4); margin:12px 0 5px; }
+  pre.code { background:var(--bg-0); border:1px solid var(--line-1); border-radius:8px; padding:10px 12px;
+    overflow-x:auto; font-family:var(--font-mono); font-size:12px; color:var(--fg-2); }
+  .ai { background:var(--ai-soft); border:1px solid var(--ai-edge); border-radius:8px; padding:10px 12px; font-size:12.5px; }
+  .ai .badge { font-size:10px; font-weight:700; color:var(--ai-2); text-transform:uppercase; margin-right:6px; }
+  table.ev { width:100%; border-collapse:collapse; font-size:12px; }
+  table.ev th, table.ev td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line-1); }
+  table.ev th { color:var(--fg-4); } table.ev td { font-family:var(--font-mono); color:var(--fg-2); }
+  footer { color:var(--fg-4); font-size:12px; text-align:center; padding-top:8px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
+<div class="shell">
+  <div class="top">
+    <span class="logo">plumb<span class="dot">.</span></span>
+    <span class="tag">confidence report</span>
+  </div>
+
+  <div class="card hero v-{{ result.verdict.value }}">
+    <span class="dot"></span>
     <div>
-      <h1>Plumb report: {{ result.target.name }}</h1>
-      <div class="meta">
-        {{ result.target.type }} | profile {{ result.profile or "none" }} |
-        ruleset {{ result.ruleset_version }} | {{ result.timestamp }}
+      <div class="vbig">{{ result.verdict.value.replace("_", " ").title() }}</div>
+      <div class="vmeta">
+        <b>{{ result.target.name }}</b> &middot; {{ result.target.type }} &middot;
+        ruleset {{ result.ruleset_version }}{% if result.profile %} &middot; {{ result.profile }}{% endif %} &middot;
+        {{ result.timestamp }}
       </div>
     </div>
-    <div class="verdict v-{{ result.verdict.value }}">{{ result.verdict.value }}</div>
-  </header>
+    {% set gaps = result.coverage.checks_skipped | length + result.coverage.families_skipped | length %}
+    {% if gaps %}<div class="cap">limited coverage: {{ gaps }} gap{{ "s" if gaps > 1 else "" }} listed below</div>{% endif %}
+  </div>
 
   <div class="card">
-    <strong>Coverage</strong>
-    <p class="ran">Ran: {{ result.coverage.families_run | map(attribute='value') | join(', ') or "none" }}</p>
-    {% if result.coverage.families_skipped %}
-    <p class="gap">Skipped, most important first:</p>
-    <ol>
-      {% for skip in result.coverage.families_skipped %}
-      <li><strong>{{ skip.family.value }}</strong>: {{ skip.reason }}</li>
-      {% endfor %}
-    </ol>
-    {% else %}
-    <p class="ran">No families skipped.</p>
+    <div class="tiles">
+      <div class="tile t-pass"><div class="n">{{ result.summary.passed }}</div><div class="l">passed</div></div>
+      <div class="tile t-fail"><div class="n">{{ result.summary.blocker }}</div><div class="l">blocker</div></div>
+      <div class="tile t-fail"><div class="n">{{ result.summary.high }}</div><div class="l">high</div></div>
+      <div class="tile t-warn"><div class="n">{{ result.summary.medium }}</div><div class="l">medium</div></div>
+      <div class="tile t-warn"><div class="n">{{ result.summary.low }}</div><div class="l">low</div></div>
+      <div class="tile t-warn"><div class="n">{{ result.summary.warned }}</div><div class="l">warned</div></div>
+      <div class="tile t-err"><div class="n">{{ result.summary.errored }}</div><div class="l">errored</div></div>
+      <div class="tile t-skip"><div class="n">{{ result.summary.skipped }}</div><div class="l">skipped</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h4>Coverage</h4>
+    <div class="fam-pills">
+      {% for f in result.coverage.families_run %}<span class="fam-pill">{{ f.value }}</span>{% endfor %}
+      {% if not result.coverage.families_run %}<span style="color:var(--fg-4);font-size:12px">no families ran</span>{% endif %}
+    </div>
+    {% if result.coverage.checks_skipped or result.coverage.families_skipped %}
+    <ul class="gaps">
+      {% for c in result.coverage.checks_skipped %}<li><b>{{ c.name }}</b>: {{ c.reason }}</li>{% endfor %}
+      {% for f in result.coverage.families_skipped %}<li><b>{{ f.family.value }}</b>: {{ f.reason }}</li>{% endfor %}
+    </ul>
     {% endif %}
   </div>
 
-  <div class="card counts">
-    <strong>Summary</strong><br>
-    <span class="pill s-PASS">passed {{ result.summary.passed }}</span>
-    <span class="pill s-FAIL">blocker {{ result.summary.blocker }}</span>
-    <span class="pill s-FAIL">high {{ result.summary.high }}</span>
-    <span class="pill s-FAIL">medium {{ result.summary.medium }}</span>
-    <span class="pill s-FAIL">low {{ result.summary.low }}</span>
-    <span class="pill s-WARN">warned {{ result.summary.warned }}</span>
-    <span class="pill s-ERROR">errored {{ result.summary.errored }}</span>
-    <span class="pill s-SKIP">skipped {{ result.summary.skipped }}</span>
-    <span>total {{ result.summary.total }}</span>
-  </div>
-
   <div class="card">
-    <strong>Checks</strong>
-    <table>
-      <thead><tr><th>Check</th><th>Status</th><th>Observed</th><th>Detail</th></tr></thead>
-      <tbody>
-      {% for check in result.checks %}
-        <tr>
-          <td>
-            <strong>{{ check.id }}</strong><br>
-            {{ check.name }}<br>
-            <span class="sev">{{ check.family.value }} | {{ check.severity.value }}</span>
-          </td>
-          <td><span class="pill s-{{ check.status.value }}">{{ check.status.value }}</span></td>
-          <td>
-            {{ check.observed or "" }}
-            {% if check.expected %}<br><span class="sev">expected: {{ check.expected }}</span>{% endif %}
-          </td>
-          <td>
-            {% if check.remediation %}{{ check.remediation }}{% endif %}
-            {% if check.ai_explanation %}<details><summary>AI explanation</summary>{{ check.ai_explanation }}</details>{% endif %}
-            {% if check.evidence.sample_rows %}
-            <details>
-              <summary>{{ check.evidence.sample_rows | length }} evidence row(s)</summary>
-              <table class="evidence">
-                <thead><tr>{% for col in check.evidence.sample_rows[0].keys() %}<th>{{ col }}</th>{% endfor %}</tr></thead>
-                <tbody>
-                {% for row in check.evidence.sample_rows %}
-                  <tr>{% for value in row.values() %}<td>{{ value }}</td>{% endfor %}</tr>
-                {% endfor %}
-                </tbody>
-              </table>
-            </details>
-            {% endif %}
-            {% if check.evidence.query %}
-            <details><summary>query</summary><pre>{{ check.evidence.query }}</pre></details>
-            {% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <h4>Checks ({{ result.checks | length }})</h4>
+    {% for check in result.checks %}
+    <details class="crow" {% if check.status.value in ("FAIL", "ERROR") %}open{% endif %}>
+      <summary>
+        <span class="cid">{{ check.id }}</span>
+        <span class="sev">{{ check.severity.value }}</span>
+        <span class="cname">{{ check.name }}</span>
+        <span class="pill p-{{ check.status.value }}">{{ check.status.value }}</span>
+      </summary>
+      <div class="detail">
+        <div class="kv">
+          {% if check.observed %}<span class="k">observed</span><span class="v">{{ check.observed }}</span>{% endif %}
+          {% if check.expected %}<span class="k">expected</span><span class="v">{{ check.expected }}</span>{% endif %}
+          <span class="k">family</span><span class="v">{{ check.family.value }}</span>
+        </div>
+        {% if check.remediation %}<div class="dh">Root cause / fix</div><div style="font-size:12.5px">{{ check.remediation }}</div>{% endif %}
+        {% if check.ai_explanation %}<div class="dh">AI explanation</div><div class="ai"><span class="badge">AI</span>{{ check.ai_explanation }}</div>{% endif %}
+        {% if check.evidence.sample_rows %}
+        <div class="dh">Evidence ({{ check.evidence.sample_rows | length }} sampled, PII redacted)</div>
+        <table class="ev">
+          <thead><tr>{% for col in check.evidence.sample_rows[0].keys() %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+          <tbody>{% for row in check.evidence.sample_rows %}<tr>{% for v in row.values() %}<td>{{ v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+        </table>
+        {% endif %}
+        {% if check.evidence.query %}<div class="dh">SQL Plumb ran</div><pre class="code">{{ check.evidence.query }}</pre>{% endif %}
+      </div>
+    </details>
+    {% endfor %}
   </div>
 
   <footer>
-    Plumb {{ plumb_version }} | run {{ result.run_id }} |
-    warehouse {{ result.environment.warehouse or "n/a" }} |
-    role {{ result.environment.role or "n/a" }} |
+    Plumb {{ plumb_version }} &middot; run {{ result.run_id }} &middot;
+    warehouse {{ result.environment.warehouse or "n/a" }} &middot; role {{ result.environment.role or "n/a" }} &middot;
     deterministic verdict, no AI in the verdict path
   </footer>
 </div>
