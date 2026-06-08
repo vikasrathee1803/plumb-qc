@@ -259,6 +259,18 @@ def test_report_html_unknown_run_is_404():
     assert client.get("/api/report/does-not-exist.html").status_code == 404
 
 
+def test_report_link_survives_a_restart():
+    """A shared report link must not rot: a fresh app (simulating a restart,
+    empty in-memory store) still serves the persisted HTML."""
+    run = client.post(
+        "/api/check/sql", json={"sql": "SELECT a FROM t, u", "static_only": True}
+    ).json()
+    fresh = TestClient(create_app())  # new process: in-memory _REPORTS is empty
+    r = fresh.get(f"/api/report/{run['run_id']}.html")
+    assert r.status_code == 200
+    assert "BLOCKED" in r.text
+
+
 def test_root_serves_something():
     # Either the built SPA or the build-me placeholder; never a 500.
     r = client.get("/")

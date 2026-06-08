@@ -23,6 +23,7 @@ from plumb import __version__
 from plumb.baseline.store import make_baseline_store
 from plumb.checks._tableau import TableauParseError, parse_workbook
 from plumb.config.loader import (
+    PLUMB_HOME,
     ConfigError,
     load_baseline_store_config,
     load_connection_profile,
@@ -52,10 +53,19 @@ SPA_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 _REPORTS: dict[str, RunResult] = {}
 _HISTORY: list[dict[str, Any]] = []
 _HISTORY_CAP = 25
+# Reports are also written here so a shared report link survives a restart.
+WEB_REPORTS_DIR = PLUMB_HOME / "reports" / "web"
 
 
 def _record(result: RunResult) -> None:
     _REPORTS[result.run_id] = result
+    try:
+        WEB_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        (WEB_REPORTS_DIR / f"{result.run_id}.html").write_text(
+            render_html(result), encoding="utf-8"
+        )
+    except OSError:
+        pass  # an unwritable reports dir must never break a run
     _HISTORY.insert(0, {
         "run_id": result.run_id,
         "verdict": result.verdict.value,
@@ -451,9 +461,13 @@ def create_app() -> FastAPI:
     @app.get("/api/report/{run_id}.html", response_class=HTMLResponse)
     def report_html(run_id: str) -> HTMLResponse:
         result = _REPORTS.get(run_id)
-        if result is None:
-            raise HTTPException(status_code=404, detail="no report for that run id")
-        return HTMLResponse(content=render_html(result))
+        if result is not None:
+            return HTMLResponse(content=render_html(result))
+        # Fall back to the persisted file so a shared link survives a restart.
+        persisted = WEB_REPORTS_DIR / f"{run_id}.html"
+        if persisted.exists():
+            return HTMLResponse(content=persisted.read_text(encoding="utf-8"))
+        raise HTTPException(status_code=404, detail="no report for that run id")
 
     if SPA_DIST.exists():
         app.mount("/", StaticFiles(directory=str(SPA_DIST), html=True), name="spa")
