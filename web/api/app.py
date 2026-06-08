@@ -225,8 +225,7 @@ def _build_stack() -> list[dict[str, Any]]:
             ("Vite", fe.get("vite")),
         ]),
         ("AI assist", [
-            ("openai (Groq)", _pkg_version("openai")),
-            ("google-generativeai", _pkg_version("google-generativeai")),
+            ("Snowflake Cortex", "in-database"),
         ]),
         ("Quality gates", [
             ("pytest", _pkg_version("pytest")),
@@ -293,12 +292,15 @@ def _sql_target_name(sql: str) -> str:
     return "SQL build"
 
 
-def _maybe_explain(result: RunResult, sql_text: str | None, enabled: bool) -> None:
+def _maybe_explain(
+    result: RunResult, sql_text: str | None, enabled: bool, session: Any = None
+) -> None:
     if not enabled:
         return
     from plumb.ai import attach_explanations, get_client
 
-    client = get_client()
+    # Cortex assist runs in-database, so it needs the live session.
+    client = get_client(session=session)
     if client is not None:
         attach_explanations(result, client, sql_text)
 
@@ -369,9 +371,11 @@ def create_app() -> FastAPI:
             connected = {"configured": False}
         ai_ready = False
         try:
-            from plumb.ai import get_client
+            from plumb.ai import cortex_enabled
 
-            ai_ready = get_client() is not None
+            # Cortex assist is available when it is enabled and a connection
+            # exists (it runs in-database on a live session).
+            ai_ready = cortex_enabled() and bool(connected["configured"])
         except Exception:  # noqa: BLE001
             ai_ready = False
         return {
@@ -443,10 +447,11 @@ def create_app() -> FastAPI:
                     run_id=run_id,
                 )
             )
+            # Explain while the session is still open: Cortex runs in-database.
+            _maybe_explain(result, req.sql, req.explain, session)
         finally:
             if session is not None:
                 session.close()
-        _maybe_explain(result, req.sql, req.explain)
         _record(result)
         return result.model_dump(mode="json")
 

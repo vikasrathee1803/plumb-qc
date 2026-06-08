@@ -4,7 +4,7 @@ results and never changes a status or verdict. Plus graceful degradation."""
 import json
 
 from plumb.ai import draft_fix, draft_recon_sql
-from plumb.ai.client import AIClient
+from plumb.ai.client import AIClient, cortex_enabled, get_client
 from plumb.ai.explain import attach_explanations, explain_failure
 from plumb.ai.parser import extract_json
 from plumb.config.models import CheckSpec, Ruleset
@@ -122,6 +122,51 @@ class TestGracefulDegradation:
         client = client_returning('{"unexpected": "shape"}')
         check = _blocked_result().checks[0]
         assert explain_failure(client, check, "sql") is None
+
+
+class _CortexSession:
+    """Minimal session that answers the Cortex COMPLETE query."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+        self.sql: str | None = None
+        self.params = None
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+        self.params = params
+
+        class _Result:
+            rows = [{"RESPONSE": self.answer}]
+
+        return _Result()
+
+
+class TestCortexAssist:
+    def test_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("PLUMB_CORTEX_MODEL", raising=False)
+        assert cortex_enabled() is False
+        # No model and no session -> graceful None, never raises.
+        assert get_client() is None
+        assert get_client(session=_CortexSession("x")) is None
+
+    def test_enabled_needs_a_live_session(self, monkeypatch):
+        monkeypatch.setenv("PLUMB_CORTEX_MODEL", "llama3.1-70b")
+        assert cortex_enabled() is True
+        assert get_client(session=None) is None  # static-only: no session
+        assert get_client(session=_CortexSession("x")) is not None
+
+    def test_completes_via_a_single_select(self, monkeypatch):
+        monkeypatch.setenv("PLUMB_CORTEX_MODEL", "llama3.1-70b")
+        session = _CortexSession("the answer")
+        client = get_client(session=session)
+        assert client is not None
+        out = client.complete("system", "user", 100)
+        assert out == "the answer"
+        # read-only invariant: a single SELECT that calls Cortex in-database
+        assert session.sql.strip().upper().startswith("SELECT")
+        assert "SNOWFLAKE.CORTEX.COMPLETE" in session.sql
+        assert session.params == ("llama3.1-70b", "system\n\nuser")
 
 
 class TestFixAndRecon:

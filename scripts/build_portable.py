@@ -28,8 +28,8 @@ BUNDLE = BUILD / "Plumb"
 CACHE = ROOT / "build" / "_cache"
 OUT_ZIP = ROOT / "dist_portable" / "Plumb-Portable-Windows-x64.zip"
 
-# Runtime dependencies (the dev tools and the heavy Gemini SDK are left out;
-# AI assist still works through Groq/OpenAI/Anthropic, which import lazily).
+# Runtime dependencies (the dev tools are left out). AI assist runs in-database
+# via Snowflake Cortex through the connector below, so there is no LLM SDK.
 RUNTIME_DEPS = [
     "sqlglot==26.3.8",
     "sqlfluff==3.3.1",
@@ -46,8 +46,6 @@ RUNTIME_DEPS = [
     "fastapi==0.115.6",
     "uvicorn==0.34.0",
     "python-multipart==0.0.20",
-    "openai==1.59.6",
-    "httpx==0.28.1",
     "tableauserverclient==0.36",
 ]
 

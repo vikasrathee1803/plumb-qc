@@ -26,10 +26,9 @@ dependencies = [
     "fastapi==0.115.6",
     "uvicorn==0.34.0",
     "python-multipart==0.0.20",
-    "openai==1.59.6",
-    "google-generativeai==0.8.3",
-    "httpx==0.28.1",
     "tableauserverclient==0.36",
+    # AI assist runs in-database via Snowflake Cortex (the snowflake connector
+    # above), so there is no external LLM SDK dependency.
 ]
 
 [project.optional-dependencies]
@@ -40,6 +39,8 @@ dev = [
     "mypy==1.14.1",
     "python-dotenv==1.0.1",
     "types-PyYAML==6.0.12.20240917",
+    # Used by fastapi.testclient (TestClient) in the web API tests.
+    "httpx==0.28.1",
 ]
 
 [project.scripts]
@@ -84,7 +85,7 @@ no_implicit_optional = true
 [[tool.mypy.overrides]]
 module = [
     "pyarrow.*", "snowflake.*", "sqlfluff.*", "keyring.*", "lxml.*",
-    "openai.*", "google.*", "anthropic.*", "tableauserverclient.*",
+    "tableauserverclient.*",
 ]
 ignore_missing_imports = true
 

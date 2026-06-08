@@ -262,12 +262,12 @@ def check(
             target=target, ruleset=ruleset, profile=profile, run_id=run_id, **request_kwargs
         )
         result = run_checks(request)
+        # Explain while the session is still open: Cortex runs in-database.
+        if explain:
+            _attach_ai_explanations(result, request_kwargs.get("sql_text"), session)
     finally:
         if session is not None:
             session.close()
-
-    if explain:
-        _attach_ai_explanations(result, request_kwargs.get("sql_text"))
 
     out_dir = out or LATEST_DIR
     _write_reports(result, out_dir)
@@ -352,16 +352,20 @@ def _baseline_store() -> BaselineStore:
     return make_baseline_store(cfg.kind, path)
 
 
-def _attach_ai_explanations(result: RunResult, sql_text: str | None) -> None:
+def _attach_ai_explanations(
+    result: RunResult, sql_text: str | None, session: object = None
+) -> None:
     """Opt-in: attach AI explanations to failing checks after the verdict is
-    decided. Never changes a status. Degrades to a note if no key is set."""
+    decided. Never changes a status. Degrades to a note when Cortex assist is
+    off or the run is static-only."""
     from plumb.ai import attach_explanations, get_client
 
-    client = get_client()
+    client = get_client(session=session)
     if client is None:
         err_console.print(
-            "[yellow]note:[/yellow] --explain set but no LLM API key found "
-            "(set GROQ_API_KEY); skipping explanations. The verdict is unaffected."
+            "[yellow]note:[/yellow] --explain set but Snowflake Cortex assist is "
+            "off (set PLUMB_CORTEX_MODEL) or this run is static-only; skipping "
+            "explanations. The verdict is unaffected."
         )
         return
     verdict_before = result.verdict

@@ -1,7 +1,7 @@
 # ADR-0013: AI assist is Groq-first, multi-provider
 
-Date: 2026-06-08. Status: accepted. Supersedes the Anthropic-only client
-in ADR notes for the Phase 2 assist layer.
+Date: 2026-06-08. Status: SUPERSEDED by ADR-0014 (assist moved in-database
+to Snowflake Cortex; the external LLM SDKs were removed).
 
 The assist layer originally wrapped the Anthropic SDK. Direction changed
 to use Groq. Decision: make the client provider-agnostic, choosing the
