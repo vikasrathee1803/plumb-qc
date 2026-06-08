@@ -182,6 +182,40 @@ def test_column_links_chain_across_a_cte():
     assert "rev" in _by_id(g)["table:raw"].columns
 
 
+def test_three_layer_cte_chain_links_columns():
+    sql = (
+        "WITH a AS (SELECT id, amt FROM raw), "
+        "b AS (SELECT id, SUM(amt) AS s FROM a GROUP BY id) "
+        "SELECT b.id, b.s AS total FROM b"
+    )
+    g = build_lineage(sql)
+    raw_a = next(e for e in g.edges if e.source == "table:raw" and e.target == "cte:a")
+    a_b = next(e for e in g.edges if e.source == "cte:a" and e.target == "cte:b")
+    b_out = next(e for e in g.edges if e.source == "cte:b" and e.target == "output")
+    assert ("amt", "amt") in _links(raw_a)
+    assert ("amt", "s") in _links(a_b)
+    assert ("s", "total") in _links(b_out)
+
+
+def test_nested_with_inside_a_subquery_is_mapped():
+    sql = "SELECT x.t FROM (WITH c AS (SELECT a AS t FROM base) SELECT t FROM c) x"
+    g = build_lineage(sql)
+    nodes = _by_id(g)
+    assert "cte:c" in nodes and "table:base" in nodes
+    assert any(n.kind == "subquery" for n in g.nodes)
+    base_c = next(e for e in g.edges if e.source == "table:base" and e.target == "cte:c")
+    assert ("a", "t") in _links(base_c)
+
+
+def test_scalar_subquery_columns_do_not_leak_into_outer_scope():
+    sql = "SELECT b.id, (SELECT MAX(k) FROM other) AS mx FROM b"
+    g = build_lineage(sql)
+    out_edge = next(e for e in g.edges if e.target == "output")
+    # k belongs to the scalar subquery, not to b; it must not be attributed here
+    assert ("k", "mx") not in _links(out_edge)
+    assert ("id", "id") in _links(out_edge)
+
+
 def test_graph_serializes_to_contract():
     g = build_lineage("SELECT a FROM t JOIN u ON t.id = u.id")
     dumped = g.model_dump(mode="json")

@@ -112,6 +112,19 @@ class _Builder:
             return
         self._depth += 1
         try:
+            # CTEs local to this query body (top-level or a nested WITH inside a
+            # subquery) become their own nodes before the body is processed.
+            with_ = (
+                expr.args.get("with")
+                if isinstance(expr, (exp.Select, exp.SetOperation))
+                else None
+            )
+            if with_ is not None:
+                for cte in with_.expressions:
+                    cid = self.node(
+                        f"cte:{cte.alias_or_name.lower()}", label=cte.alias_or_name, kind="cte"
+                    )
+                    self.process_query(cte.this, cid)
             if isinstance(expr, exp.Subquery):
                 self.process_query(expr.this, consumer_id)
             elif isinstance(expr, exp.SetOperation):
@@ -173,7 +186,7 @@ class _Builder:
             out_name = _projection_name(proj)
             if out_name == "*":
                 continue
-            for col in proj.find_all(exp.Column):
+            for col in _columns_at_level(proj):
                 rid = alias_to_rid.get(col.table.lower()) if col.table else single
                 edge = edge_for_rid.get(rid) if rid else None
                 if edge is None:
@@ -225,6 +238,27 @@ def _short(text: str, limit: int = 80) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
+def _columns_at_level(root: exp.Expression) -> list[exp.Column]:
+    """Columns referenced directly in a projection, not descending into nested
+    subqueries (a scalar subquery's columns belong to its own scope, not this
+    one). Aggregates, functions, arithmetic and CASE are traversed."""
+    cols: list[exp.Column] = []
+    stack: list[exp.Expression] = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, exp.Column):
+            cols.append(node)
+            continue
+        for value in node.args.values():
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                if isinstance(item, exp.Expression) and not isinstance(
+                    item, (exp.Subquery, exp.Select)
+                ):
+                    stack.append(item)
+    return cols
+
+
 def _projection_name(proj: exp.Expression) -> str:
     if isinstance(proj, exp.Alias):
         return proj.alias
@@ -262,14 +296,7 @@ def build_lineage(sql: str) -> LineageGraph:
     cte_names = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
     builder = _Builder(cte_names)
 
-    with_ = tree.args.get("with") if isinstance(tree, (exp.Select, exp.SetOperation)) else None
-    if with_ is not None:
-        for cte in with_.expressions:
-            cid = builder.node(
-                f"cte:{cte.alias_or_name.lower()}", label=cte.alias_or_name, kind="cte"
-            )
-            builder.process_query(cte.this, cid)
-
+    # process_query handles WITH at every level (top-level and nested).
     builder.node("output", label="result", kind="output")
     builder.process_query(tree, "output")
 
