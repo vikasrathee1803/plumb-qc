@@ -147,6 +147,42 @@ def create_app() -> FastAPI:
             ],
         }
 
+    @app.get("/api/about")
+    def about() -> dict[str, Any]:
+        """Live engine facts for the 'how it works' view: real counts from
+        the registry, the connection, and the AI provider order, so the
+        diagram reflects the running system rather than a static picture."""
+        cat = check_catalog()
+        fam: dict[str, int] = {}
+        for c in cat:
+            fam[c["family"]] = fam.get(c["family"], 0) + 1
+        try:
+            conn = load_connection_profile()
+            connected = {"configured": True, "account": conn.account, "warehouse": conn.warehouse}
+        except ConfigError:
+            connected = {"configured": False}
+        ai_ready = False
+        try:
+            from plumb.ai import get_client
+
+            ai_ready = get_client() is not None
+        except Exception:  # noqa: BLE001
+            ai_ready = False
+        return {
+            "version": __version__,
+            "total_checks": len(cat),
+            "families": [{"family": k, "count": v} for k, v in sorted(fam.items())],
+            "connection": connected,
+            "ai_ready": ai_ready,
+            "verdict_tiers": ["BLOCKED", "REVIEW", "READY_WITH_NOTES", "READY"],
+            "invariants": [
+                "Read-only: the engine refuses any statement that is not a read",
+                "Deterministic verdict: no LLM ever sets a status",
+                "Every query is tagged plumb_qc:{run_id} on a dedicated warehouse",
+                "Evidence samples are capped and PII-redacted",
+            ],
+        }
+
     @app.get("/api/connection")
     def connection() -> dict[str, Any]:
         """Report whether a live Snowflake connection is configured, so the

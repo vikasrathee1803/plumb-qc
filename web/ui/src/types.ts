@@ -57,6 +57,16 @@ export interface Connection {
   role?: string;
 }
 
+export interface About {
+  version: string;
+  total_checks: number;
+  families: { family: string; count: number }[];
+  connection: { configured: boolean; account?: string; warehouse?: string };
+  ai_ready: boolean;
+  verdict_tiers: string[];
+  invariants: string[];
+}
+
 // One configurable check in the UI: enabled flag plus param values keyed by name.
 export interface CheckState {
   id: string;

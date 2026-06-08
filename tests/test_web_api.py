@@ -34,6 +34,18 @@ def test_rulesets_lists_check_sets():
     assert "customer_ltv" in body["rulesets"]
 
 
+def test_about_endpoint_reports_live_engine_facts():
+    r = client.get("/api/about")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_checks"] > 0
+    assert body["verdict_tiers"] == ["BLOCKED", "REVIEW", "READY_WITH_NOTES", "READY"]
+    fams = {f["family"] for f in body["families"]}
+    assert "assertions" in fams and "tableau_static" in fams
+    assert any("read-only" in inv.lower() for inv in body["invariants"])
+    assert "configured" in body["connection"]
+
+
 def test_connection_endpoint_reports_configuration():
     r = client.get("/api/connection")
     assert r.status_code == 200

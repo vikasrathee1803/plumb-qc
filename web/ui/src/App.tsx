@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  fetchCatalog, fetchConnection, fetchProfiles, fetchRulesetChecks, runSql, runTableau,
+  fetchAbout, fetchCatalog, fetchConnection, fetchProfiles, fetchRulesetChecks, runSql, runTableau,
 } from "./api";
+import { Architecture } from "./Architecture";
 import { ChecksEditor, CustomChecksEditor } from "./Customize";
 import { Report } from "./Report";
 import { Drawer, Segmented, SwitchRow } from "./ui";
-import type { CatalogCheck, CheckState, Connection, CustomCheck, RunResult } from "./types";
+import type { About, CatalogCheck, CheckState, Connection, CustomCheck, RunResult } from "./types";
 
 const SAMPLE_SQL =
   "SELECT customer_id, segment, region, lifetime_revenue, last_order_date\n" +
@@ -30,12 +31,15 @@ export function App() {
   const [conn, setConn] = useState<Connection>({ configured: false });
   const [profiles, setProfiles] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<CatalogCheck[]>([]);
+  const [about, setAbout] = useState<About | null>(null);
+  const [archOpen, setArchOpen] = useState(false);
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
   useEffect(() => {
     fetchConnection().then(setConn).catch(() => undefined);
     fetchProfiles().then((d) => setProfiles(d.profiles)).catch(() => undefined);
     fetchCatalog().then(setCatalog).catch(() => undefined);
+    fetchAbout().then(setAbout).catch(() => undefined);
   }, []);
 
   return (
@@ -47,10 +51,20 @@ export function App() {
           <span className="led" />
           {conn.configured ? `${conn.account}` : "no connection"}
         </span>
+        <button className="iconbtn" title="How Plumb works" aria-label="How Plumb works"
+          onClick={() => setArchOpen(true)}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="5" cy="6" r="2" /><circle cx="5" cy="18" r="2" /><circle cx="19" cy="12" r="2" />
+            <path d="M7 6h6a3 3 0 0 1 3 3v1M7 18h6a3 3 0 0 0 3-3v-1" />
+          </svg>
+        </button>
         <button className="iconbtn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
           {theme === "dark" ? "☀" : "☾"}
         </button>
       </div>
+
+      <Architecture open={archOpen} onClose={() => setArchOpen(false)} about={about} />
 
       <div className="stage">
         <h1 className="h1">Prove it before you ship.</h1>

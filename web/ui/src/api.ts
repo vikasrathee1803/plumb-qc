@@ -1,4 +1,4 @@
-import type { CatalogCheck, CheckState, Connection, RunResult } from "./types";
+import type { About, CatalogCheck, CheckState, Connection, RunResult } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url);
@@ -7,6 +7,7 @@ async function getJSON<T>(url: string): Promise<T> {
 }
 
 export const fetchConnection = () => getJSON<Connection>("/api/connection");
+export const fetchAbout = () => getJSON<About>("/api/about");
 export const fetchProfiles = () =>
   getJSON<{ ruleset_version: string; profiles: string[] }>("/api/profiles");
 export const fetchRulesets = () =>
