@@ -63,3 +63,10 @@ export interface CheckState {
   enabled: boolean;
   params: Record<string, unknown>;
 }
+
+// A user-authored assertion: a SQL query whose returned rows are violations.
+export interface CustomCheck {
+  name: string;
+  severity: string;
+  sql: string;
+}

@@ -1,30 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  fetchCatalog, fetchConnection, fetchProfiles, fetchRulesetChecks, fetchRulesets,
-  runSql, runTableau,
+  fetchCatalog, fetchConnection, fetchProfiles, fetchRulesetChecks, runSql, runTableau,
 } from "./api";
-import { ConfigPanel } from "./ConfigPanel";
+import { ChecksEditor, CustomChecksEditor } from "./Customize";
 import { Report } from "./Report";
-import type { CatalogCheck, CheckState, Connection, RunResult } from "./types";
+import { Drawer, Segmented, SwitchRow } from "./ui";
+import type { CatalogCheck, CheckState, Connection, CustomCheck, RunResult } from "./types";
 
 const SAMPLE_SQL =
   "SELECT customer_id, segment, region, lifetime_revenue, last_order_date\n" +
   "FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV";
 
-// Presets seed the check list. A preset is just a starting point you can edit.
 interface Preset { id: string; label: string; rules: string; mode?: "all" | "static"; }
 const PRESETS: Preset[] = [
   { id: "recommended", label: "Recommended", rules: "plumb" },
-  { id: "customer_ltv", label: "Customer LTV (demo)", rules: "customer_ltv" },
+  { id: "customer_ltv", label: "Customer LTV demo", rules: "customer_ltv" },
   { id: "everything", label: "Everything", rules: "plumb", mode: "all" },
-  { id: "minimal", label: "Quick (static only)", rules: "plumb", mode: "static" },
+  { id: "minimal", label: "Quick", rules: "plumb", mode: "static" },
 ];
-
-// Standards are the team rulebook: how strict the pass/fail bar is.
-const STANDARDS: { id: string; label: string; note: string }[] = [
+const STANDARDS = [
   { id: "", label: "Standard", note: "Balanced. Fails the build on a review-level issue." },
-  { id: "finance", label: "Finance (strict)", note: "Strictest gate, hides row samples, 12h freshness." },
-  { id: "marketing", label: "Marketing (lenient)", note: "Tolerates 2% nulls and 48h-old data." },
+  { id: "finance", label: "Finance", note: "Strict gate, row samples hidden, 12-hour freshness." },
+  { id: "marketing", label: "Marketing", note: "Lenient. Tolerates 2% nulls and 48-hour-old data." },
 ];
 
 export function App() {
@@ -32,61 +29,43 @@ export function App() {
   const [tab, setTab] = useState<"sql" | "tableau">("sql");
   const [conn, setConn] = useState<Connection>({ configured: false });
   const [profiles, setProfiles] = useState<string[]>([]);
-  const [version, setVersion] = useState("");
   const [catalog, setCatalog] = useState<CatalogCheck[]>([]);
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
   useEffect(() => {
     fetchConnection().then(setConn).catch(() => undefined);
-    fetchProfiles().then((d) => { setProfiles(d.profiles); setVersion(d.ruleset_version); }).catch(() => undefined);
-    fetchRulesets().catch(() => undefined);
+    fetchProfiles().then((d) => setProfiles(d.profiles)).catch(() => undefined);
     fetchCatalog().then(setCatalog).catch(() => undefined);
   }, []);
 
   return (
     <>
-      <div className="appbar">
-        <div className="brand">
-          <span className="logo">plumb<span className="dot">.</span></span>
-          <span className="tag">prove a build is correct before it ships</span>
-        </div>
+      <div className="topbar">
+        <span className="wordmark">plumb<span className="dot">.</span></span>
         <span className="spacer" />
-        <span className={`chip-conn ${conn.configured ? "live" : ""}`}>
+        <span className={`conn ${conn.configured ? "live" : ""}`}>
           <span className="led" />
-          {conn.configured ? `${conn.account} · ${conn.warehouse}` : "no Snowflake connection"}
+          {conn.configured ? `${conn.account}` : "no connection"}
         </span>
-        <button className="icon-btn" title="Toggle theme"
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+        <button className="iconbtn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
           {theme === "dark" ? "☀" : "☾"}
         </button>
       </div>
 
-      <div className="shell">
-        <div className="card pad">
-          <div className="tabs">
-            <button className={tab === "sql" ? "on" : ""} onClick={() => setTab("sql")}>SQL</button>
-            <button className={tab === "tableau" ? "on" : ""} onClick={() => setTab("tableau")}>Tableau</button>
-          </div>
-          <div style={{ marginTop: 16 }}>
-            {tab === "sql"
-              ? <SqlView conn={conn} profiles={profiles} catalog={catalog} version={version} />
-              : <TableauView profiles={profiles} catalog={catalog} />}
-          </div>
+      <div className="stage">
+        <h1 className="h1">Prove it before you ship.</h1>
+        <p className="sub">Run trusted checks on a SQL build or a Tableau workbook in seconds.</p>
+
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
+          <Segmented value={tab} onChange={setTab}
+            options={[{ value: "sql", label: "SQL" }, { value: "tableau", label: "Tableau" }]} />
         </div>
+
+        {tab === "sql"
+          ? <SqlView conn={conn} profiles={profiles} catalog={catalog} />
+          : <TableauView profiles={profiles} catalog={catalog} />}
       </div>
     </>
-  );
-}
-
-function HowItWorks({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="explain">
-      <button className="explain-btn" onClick={() => setOpen(!open)}>
-        How this works {open ? "−" : "+"}
-      </button>
-      {open && <div className="explain-body">{children}</div>}
-    </div>
   );
 }
 
@@ -104,8 +83,8 @@ function applyPreset(preset: Preset, catalog: CatalogCheck[], seed: CheckState[]
   return next;
 }
 
-function SqlView({ conn, profiles, catalog, version }: {
-  conn: Connection; profiles: string[]; catalog: CatalogCheck[]; version: string;
+function SqlView({ conn, profiles, catalog }: {
+  conn: Connection; profiles: string[]; catalog: CatalogCheck[];
 }) {
   const [sql, setSql] = useState(SAMPLE_SQL);
   const [presetId, setPresetId] = useState("customer_ltv");
@@ -113,16 +92,17 @@ function SqlView({ conn, profiles, catalog, version }: {
   const [live, setLive] = useState(false);
   const [explain, setExplain] = useState(false);
   const [checkState, setCheckState] = useState<Record<string, CheckState>>({});
+  const [custom, setCustom] = useState<CustomCheck[]>([]);
+  const [drawer, setDrawer] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const sqlCatalog = useMemo(() => catalog.filter((c) => !c.family.startsWith("tableau")), [catalog]);
+  const standardLabel = STANDARDS.find((s) => s.id === standard)?.label ?? "Standard";
 
   useEffect(() => { setLive(conn.configured); }, [conn.configured]);
-
-  // (re)seed the check list whenever the preset or catalog changes.
   useEffect(() => {
     if (!catalog.length) return;
     fetchRulesetChecks(preset.rules)
@@ -130,18 +110,22 @@ function SqlView({ conn, profiles, catalog, version }: {
       .catch(() => setCheckState(applyPreset(preset, catalog, [])));
   }, [presetId, catalog]);
 
-  const enabled = useMemo(
-    () => Object.values(checkState).filter((c) => c.enabled && sqlCatalog.some((s) => s.id === c.id)),
-    [checkState, sqlCatalog]
+  const validCustom = custom.filter((c) => c.name.trim() && c.sql.trim());
+  const enabledCount = useMemo(
+    () => Object.values(checkState).filter((c) => c.enabled && sqlCatalog.some((s) => s.id === c.id)).length + validCustom.length,
+    [checkState, sqlCatalog, validCustom.length]
   );
-  const std = STANDARDS.find((s) => s.id === standard) ?? STANDARDS[0];
 
   async function run() {
     setBusy(true); setError(""); setResult(null);
     try {
+      const customSpecs: CheckState[] = validCustom.map((c) => ({
+        id: "D-CUSTOM-001", enabled: true,
+        params: { name: c.name, sql: c.sql, severity: c.severity },
+      }));
       setResult(await runSql({
         sql, profile: standard || null, rules: preset.rules,
-        static_only: !live, explain, checks: Object.values(checkState),
+        static_only: !live, explain, checks: [...Object.values(checkState), ...customSpecs],
       }));
     } catch (e) { setError(String(e instanceof Error ? e.message : e)); }
     finally { setBusy(false); }
@@ -149,59 +133,56 @@ function SqlView({ conn, profiles, catalog, version }: {
 
   return (
     <>
-      <HowItWorks>
-        Plumb runs deterministic checks against your SQL and gives a trusted verdict.
-        Pick a <b>preset</b> to start from a sensible set of checks, choose a <b>standard</b> for how
-        strict the pass bar is, then fine-tune individual checks below. Turn on <b>Live</b> to run
-        against Snowflake; off, it analyzes the SQL without connecting.
-      </HowItWorks>
-
-      <label className="fld" style={{ marginTop: 14 }}>Your SQL
-        <textarea value={sql} rows={6} spellCheck={false} onChange={(e) => setSql(e.target.value)} />
-      </label>
-
-      <div className="picks">
-        <div className="pick">
-          <div className="pick-label">Preset</div>
-          <select value={presetId} onChange={(e) => setPresetId(e.target.value)}>
-            {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-          </select>
-          <div className="pick-note">A starting set of checks. Edit any of them below.</div>
-        </div>
-        <div className="pick">
-          <div className="pick-label">Standard</div>
-          <select value={standard} onChange={(e) => setStandard(e.target.value)}>
-            {STANDARDS.filter((s) => s.id === "" || profiles.includes(s.id))
-              .map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </select>
-          <div className="pick-note">{std.note}</div>
-        </div>
-      </div>
-
-      <div className="run-bar">
-        <label className={`toggle ${conn.configured ? "" : "disabled"}`}>
-          <input type="checkbox" checked={live} disabled={!conn.configured}
-            onChange={(e) => setLive(e.target.checked)} />
-          Live (run against Snowflake)
+      <div className="panel">
+        <label className="field">
+          <span className="lab">Your SQL build</span>
+          <textarea value={sql} rows={6} spellCheck={false} onChange={(e) => setSql(e.target.value)} />
         </label>
-        <label className="toggle">
-          <input type="checkbox" checked={explain} onChange={(e) => setExplain(e.target.checked)} />
-          Explain failures with AI
-        </label>
-        <button className="btn-primary" onClick={run} disabled={busy || !enabled.length}>
-          {busy ? <><span className="spin" /> Running</> : `Run ${enabled.length} checks`}
+
+        <div className="setup">
+          <span className="desc">
+            <b>{enabledCount}</b> checks · <b>{preset.label}</b> preset · <b>{standardLabel}</b> standard
+          </span>
+          <button className="linkbtn" onClick={() => setDrawer(true)}>Customize</button>
+        </div>
+
+        <div className="toggles">
+          <SwitchRow checked={live} onChange={setLive} disabled={!conn.configured}
+            label={conn.configured ? "Run live against Snowflake" : "Live (no connection)"} />
+          <SwitchRow checked={explain} onChange={setExplain} label="Explain failures with AI" />
+        </div>
+
+        <button className="run" onClick={run} disabled={busy || !enabledCount}>
+          {busy ? <><span className="spin" />Running</> : `Run ${enabledCount} checks`}
         </button>
+        {error && <p className="error">{error}</p>}
       </div>
-      {error && <p className="error">{error}</p>}
 
-      <ConfigPanel catalog={sqlCatalog} state={checkState} setState={setCheckState} />
+      {result ? <Report result={result} />
+        : <div className="empty">Ready when you are. Adjust anything in Customize.</div>}
 
-      <div style={{ marginTop: 18 }}>
-        {result ? <Report result={result} />
-          : <div className="card pad empty">
-              Ready to run {enabled.length} checks{live ? " against your live Snowflake" : " on the SQL"}. Ruleset {version}.
-            </div>}
-      </div>
+      <Drawer open={drawer} onClose={() => setDrawer(false)} title="Customize checks">
+        <div className="dgroup-label">Preset</div>
+        <div className="preset-pills">
+          {PRESETS.map((p) => (
+            <button key={p.id} className={`pill-btn ${p.id === presetId ? "on" : ""}`}
+              onClick={() => setPresetId(p.id)}>{p.label}</button>
+          ))}
+        </div>
+        <div className="note">A starting set of checks. Switch any on or off below.</div>
+
+        <div className="dgroup-label">Standard</div>
+        <div className="preset-pills">
+          {STANDARDS.filter((s) => s.id === "" || profiles.includes(s.id)).map((s) => (
+            <button key={s.id} className={`pill-btn ${s.id === standard ? "on" : ""}`}
+              onClick={() => setStandard(s.id)}>{s.label}</button>
+          ))}
+        </div>
+        <div className="note">{STANDARDS.find((s) => s.id === standard)?.note}</div>
+
+        <ChecksEditor catalog={sqlCatalog} state={checkState} setState={setCheckState} />
+        <CustomChecksEditor checks={custom} setChecks={setCustom} />
+      </Drawer>
     </>
   );
 }
@@ -210,26 +191,23 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
   const [file, setFile] = useState<File | null>(null);
   const [standard, setStandard] = useState("");
   const [checkState, setCheckState] = useState<Record<string, CheckState>>({});
+  const [drawer, setDrawer] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const tabCatalog = useMemo(() => catalog.filter((c) => c.family.startsWith("tableau")), [catalog]);
-
   useEffect(() => {
     if (!tabCatalog.length) return;
     fetchRulesetChecks("plumb").then((d) => {
       const seed = new Map(d.checks.map((c) => [c.id, c]));
       const next: Record<string, CheckState> = {};
-      for (const c of tabCatalog) {
-        const r = seed.get(c.id);
-        next[c.id] = { id: c.id, enabled: r?.enabled ?? true, params: r?.params ?? {} };
-      }
+      for (const c of tabCatalog) next[c.id] = { id: c.id, enabled: seed.get(c.id)?.enabled ?? true, params: seed.get(c.id)?.params ?? {} };
       setCheckState(next);
     }).catch(() => undefined);
   }, [tabCatalog]);
 
-  const enabled = useMemo(() => Object.values(checkState).filter((c) => c.enabled), [checkState]);
+  const enabledCount = useMemo(() => Object.values(checkState).filter((c) => c.enabled).length, [checkState]);
 
   async function run() {
     if (!file) { setError("Choose a .twb or .twbx file first."); return; }
@@ -241,39 +219,38 @@ function TableauView({ profiles, catalog }: { profiles: string[]; catalog: Catal
 
   return (
     <>
-      <HowItWorks>
-        Upload a Tableau workbook (.twb or .twbx) and Plumb parses it locally, with no Tableau Server
-        access, then runs the workbook checks below. Choose a <b>standard</b> for how strict the verdict is.
-      </HowItWorks>
+      <div className="panel">
+        <span className="lab" style={{ display: "block", marginBottom: 7 }}>Tableau workbook</span>
+        <label className="drop">
+          {file ? <><strong>{file.name}</strong><div className="note">click to choose a different file</div></>
+            : <><strong>Choose a .twb or .twbx</strong><div className="note">parsed locally, no Tableau Server access</div></>}
+          <input type="file" accept=".twb,.twbx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        </label>
 
-      <label className="fld" style={{ marginTop: 14 }}>Workbook
-        <input type="file" accept=".twb,.twbx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-      </label>
-
-      <div className="picks">
-        <div className="pick">
-          <div className="pick-label">Standard</div>
-          <select value={standard} onChange={(e) => setStandard(e.target.value)}>
-            <option value="">Standard</option>
-            {profiles.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <div className="pick-note">How strict the pass/fail bar is.</div>
+        <div className="setup">
+          <span className="desc"><b>{enabledCount}</b> workbook checks · <b>{STANDARDS.find((s) => s.id === standard)?.label ?? "Standard"}</b> standard</span>
+          <button className="linkbtn" onClick={() => setDrawer(true)}>Customize</button>
         </div>
-      </div>
 
-      <div className="run-bar">
-        <button className="btn-primary" onClick={run} disabled={busy}>
-          {busy ? <><span className="spin" /> Parsing</> : `Check workbook (${enabled.length} checks)`}
+        <button className="run" onClick={run} disabled={busy}>
+          {busy ? <><span className="spin" />Parsing</> : `Check workbook (${enabledCount} checks)`}
         </button>
+        {error && <p className="error">{error}</p>}
       </div>
-      {error && <p className="error">{error}</p>}
 
-      <ConfigPanel catalog={tabCatalog} state={checkState} setState={setCheckState} />
+      {result ? <Report result={result} />
+        : <div className="empty">Upload a workbook to run the Tableau checks.</div>}
 
-      <div style={{ marginTop: 18 }}>
-        {result ? <Report result={result} />
-          : <div className="card pad empty">Upload a workbook to run {enabled.length} Tableau checks.</div>}
-      </div>
+      <Drawer open={drawer} onClose={() => setDrawer(false)} title="Customize checks">
+        <div className="dgroup-label">Standard</div>
+        <div className="preset-pills">
+          <button className={`pill-btn ${standard === "" ? "on" : ""}`} onClick={() => setStandard("")}>Standard</button>
+          {profiles.map((p) => (
+            <button key={p} className={`pill-btn ${standard === p ? "on" : ""}`} onClick={() => setStandard(p)}>{p}</button>
+          ))}
+        </div>
+        <ChecksEditor catalog={tabCatalog} state={checkState} setState={setCheckState} />
+      </Drawer>
     </>
   );
 }

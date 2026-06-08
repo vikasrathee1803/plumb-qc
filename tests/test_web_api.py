@@ -113,6 +113,31 @@ def test_configurable_check_params_flow_through():
     assert grain["status"] == "SKIP"
 
 
+def test_custom_check_flows_through_the_api():
+    """A user-authored custom assertion reaches the engine and gets a
+    distinct D-CUSTOM id in the result."""
+    r = client.post(
+        "/api/check/sql",
+        json={
+            "sql": "SELECT id FROM t",
+            "static_only": True,
+            "checks": [
+                {
+                    "id": "D-CUSTOM-001",
+                    "enabled": True,
+                    "params": {
+                        "name": "no negatives",
+                        "sql": "SELECT * FROM {{ target }} WHERE x < 0",
+                    },
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200
+    ids = [c["id"] for c in r.json()["checks"]]
+    assert "D-CUSTOM:no negatives" in ids
+
+
 def test_sql_static_only_cartesian_join_is_blocked():
     r = client.post(
         "/api/check/sql",
