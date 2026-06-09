@@ -82,6 +82,38 @@ def test_lineage_unparseable_is_400():
     assert client.post("/api/lineage", json={"sql": "SELEKT )("}).status_code == 400
 
 
+def test_check_sql_folds_multistatement_build():
+    sql = (
+        "USE WAREHOUSE WH;\n"
+        "CREATE OR REPLACE TEMP TABLE stg AS SELECT id, amount FROM raw WHERE amount > 0;\n"
+        "CREATE OR REPLACE TABLE daily AS "
+        "SELECT id, SUM(amount) AS total FROM stg, regions GROUP BY id;"
+    )
+    r = client.post("/api/check/sql", json={"sql": sql, "static_only": True})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["target"]["name"] == "daily"  # the build target, not a source table
+    assert j.get("build_notes") and "daily" in j["build_notes"][0]
+    assert j["verdict"] == "BLOCKED"  # the comma join in the final build is caught
+
+
+def test_lineage_folds_multistatement_build():
+    sql = (
+        "CREATE TEMP TABLE stg AS SELECT a FROM raw;\n"
+        "CREATE TABLE final AS SELECT a FROM stg, other;"
+    )
+    r = client.post("/api/lineage", json={"sql": sql})
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("build_notes")
+    assert any(e["risk"] for e in body["edges"])  # comma-join fan-out still flagged
+
+
+def test_check_sql_with_no_read_is_400():
+    r = client.post("/api/check/sql", json={"sql": "USE WAREHOUSE WH;", "static_only": True})
+    assert r.status_code == 400
+
+
 def test_rulesets_lists_check_sets():
     r = client.get("/api/rulesets")
     assert r.status_code == 200

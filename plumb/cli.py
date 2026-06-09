@@ -273,6 +273,17 @@ def check(
         request_kwargs["workbook"] = parsed
     else:
         sql_text, target = _load_target(query, inline)
+        from plumb.engine.buildquery import BuildExtractError, extract_build_query
+
+        try:
+            build = extract_build_query(sql_text)
+        except BuildExtractError as exc:
+            raise _fail(f"could not read the build: {exc}") from exc
+        sql_text = build.sql
+        if build.target_name:
+            target = target.model_copy(update={"name": build.target_name})
+        for note in build.notes:
+            console.print(f"[dim]{note}[/dim]")
         request_kwargs["sql_text"] = sql_text
         request_kwargs["baseline_store"] = _baseline_store()
         request_kwargs["baseline_name"] = baseline

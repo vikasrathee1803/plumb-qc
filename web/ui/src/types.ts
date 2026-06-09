@@ -32,6 +32,7 @@ export interface RunResult {
   summary: Record<string, number>;
   checks: CheckResult[];
   environment: { warehouse: string | null; role: string | null; query_tag: string | null };
+  build_notes?: string[];
 }
 
 export interface ParamHint {
@@ -171,4 +172,5 @@ export interface LineageGraph {
   nodes: LineageNode[];
   edges: LineageEdge[];
   risks: string[];
+  build_notes?: string[];
 }

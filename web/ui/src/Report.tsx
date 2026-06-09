@@ -103,6 +103,12 @@ export function Report({ result, onSelectRun }: {
   ];
   return (
     <>
+      {result.build_notes?.length ? (
+        <div className="buildnote">
+          <span className="bn-ico">⤳</span>
+          {result.build_notes.map((n, i) => <span key={i}>{n}</span>)}
+        </div>
+      ) : null}
       <div className={`verdict v-${result.verdict}`}>
         <div className="ring">{VERDICT_GLYPH[result.verdict] ?? "•"}</div>
         <div className="vmain">

@@ -57,6 +57,7 @@ from plumb.connect.snowflake import (
     SnowflakeSession,
     is_privileged_role,
 )
+from plumb.engine.buildquery import BuildExtractError, extract_build_query
 from plumb.engine.catalog import catalog as check_catalog
 from plumb.engine.lineage import build_lineage
 from plumb.engine.models import RunResult, Target
@@ -432,10 +433,17 @@ def create_app() -> FastAPI:
         if len(req.sql) > _MAX_SQL_CHARS:
             raise HTTPException(status_code=400, detail="SQL is too large to map")
         try:
-            graph = build_lineage(req.sql)
+            build = extract_build_query(req.sql)
+        except BuildExtractError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            graph = build_lineage(build.sql)
         except SqlParseError as exc:
             raise HTTPException(status_code=400, detail=f"could not parse SQL: {exc}") from exc
-        return graph.model_dump(mode="json")
+        payload = graph.model_dump(mode="json")
+        if build.notes:
+            payload["build_notes"] = build.notes
+        return payload
 
     @app.get("/api/checks")
     def checks() -> dict[str, Any]:
@@ -663,6 +671,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="sql is required")
         if len(req.sql) > _MAX_SQL_CHARS:
             raise HTTPException(status_code=400, detail="SQL is too large")
+        # Fold a view/CTAS/multi-step build into the single read Plumb checks.
+        try:
+            build = extract_build_query(req.sql)
+        except BuildExtractError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        build_sql = build.sql
         ruleset = _resolve_ruleset(req.profile, req.rules)
         if req.checks is not None:
             # The UI sent an explicit check configuration; it replaces the
@@ -684,9 +698,13 @@ def create_app() -> FastAPI:
         try:
             result = run_checks(
                 RunRequest(
-                    target=Target(type="sql", name=_sql_target_name(req.sql), source_ref=None),
+                    target=Target(
+                        type="sql",
+                        name=build.target_name or _sql_target_name(build_sql),
+                        source_ref=None,
+                    ),
                     ruleset=ruleset,
-                    sql_text=req.sql,
+                    sql_text=build_sql,
                     profile=req.profile,
                     session=session,
                     baseline_store=store,
@@ -695,12 +713,15 @@ def create_app() -> FastAPI:
                 )
             )
             # Explain while the session is still open: Cortex runs in-database.
-            _maybe_explain(result, req.sql, req.explain, session)
+            _maybe_explain(result, build_sql, req.explain, session)
         finally:
             if session is not None:
                 session.close()
         _record(result)
-        return result.model_dump(mode="json")
+        payload = result.model_dump(mode="json")
+        if build.notes:
+            payload["build_notes"] = build.notes
+        return payload
 
     @app.post("/api/check/tableau")
     async def check_tableau(
