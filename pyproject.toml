@@ -74,6 +74,9 @@ select = ["E", "F", "W", "I", "B", "T20"]
 "web/api/app.py" = ["B008"]
 # Demo scripts are standalone tools where print to stdout is the intended output.
 "scripts/*.py" = ["T201", "E402", "E501"]
+# The self-check prints its PASS/FAIL report to stdout (raw print, not rich, so
+# it still works when a dependency is the thing that is broken).
+"plumb/diagnostics.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.11"

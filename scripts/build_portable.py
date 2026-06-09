@@ -96,8 +96,15 @@ def _open_browser() -> None:
 
 
 if __name__ == "__main__":
-    import uvicorn
-    import web.api.app as appmod
+    try:
+        import uvicorn
+        import web.api.app as appmod
+    except ModuleNotFoundError as exc:
+        print(f"Could not start Plumb: {exc}.")
+        print("This usually means run_plumb.py was launched with the wrong Python.")
+        print("Double-click run.bat instead - it uses this folder's bundled Python.")
+        print("To diagnose, run check.bat.")
+        sys.exit(1)
 
     token = getattr(appmod.app.state, "api_token", "")
     print(f"Plumb is running at http://{HOST}:{PORT}/")
@@ -112,6 +119,25 @@ RUN_BAT = (
     "cd /d \"%~dp0\"\r\n"
     "echo Starting Plumb...\r\n"
     "\"%~dp0python\\python.exe\" \"%~dp0run_plumb.py\"\r\n"
+    "pause\r\n"
+)
+
+CHECK_PLUMB = '''"""Portable self-check for Plumb. Started by check.bat."""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "app"))
+
+from plumb.diagnostics import main
+
+raise SystemExit(main())
+'''
+
+CHECK_BAT = (
+    "@echo off\r\n"
+    "cd /d \"%~dp0\"\r\n"
+    "\"%~dp0python\\python.exe\" \"%~dp0check_plumb.py\"\r\n"
     "pause\r\n"
 )
 
@@ -130,7 +156,13 @@ README = (
     "    profile if this folder is read-only. It never touches Program Files,\r\n"
     "    the registry, or any system path.\r\n\r\n"
     "Live Snowflake checks read ~/.plumb/connection.yml (key-pair / SSO).\r\n"
-    "Without it, Plumb runs every static check and the query map offline.\r\n"
+    "Without it, Plumb runs every static check and the query map offline.\r\n\r\n"
+    "Troubleshooting:\r\n"
+    "  - Always start with run.bat, not run_plumb.py. run.bat uses the Python\r\n"
+    "    bundled in this folder; double-clicking run_plumb.py may use a different\r\n"
+    "    Python that is missing the dependencies (e.g. 'No module named uvicorn').\r\n"
+    "  - If it will not start, run check.bat. It reports every dependency and\r\n"
+    "    component as PASS or FAIL so you can see exactly what is wrong.\r\n"
 )
 
 
@@ -231,9 +263,11 @@ def build() -> None:
     n = write_sbom(site_packages, BUNDLE / "SBOM.json")
     log(f"wrote SBOM.json ({n} components)")
 
-    # 6. Launcher and docs.
+    # 6. Launcher, self-check, and docs.
     (BUNDLE / "run_plumb.py").write_text(RUN_PLUMB, encoding="utf-8")
     (BUNDLE / "run.bat").write_text(RUN_BAT, encoding="ascii", newline="")
+    (BUNDLE / "check_plumb.py").write_text(CHECK_PLUMB, encoding="utf-8")
+    (BUNDLE / "check.bat").write_text(CHECK_BAT, encoding="ascii", newline="")
     (BUNDLE / "README.txt").write_text(README, encoding="ascii", newline="")
     (BUNDLE / "data" / "reports" / "web").mkdir(parents=True)
 

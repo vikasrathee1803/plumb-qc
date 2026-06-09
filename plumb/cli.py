@@ -177,6 +177,17 @@ def rules_pull(
 
 # --- init ---------------------------------------------------------------
 
+@app.command("doctor")
+def doctor() -> None:
+    """Self-check the install: imports, dependencies, the engine, and the web app.
+
+    Run this first when something will not start. Each item prints PASS or FAIL
+    and the command exits non-zero if anything is wrong."""
+    from plumb.diagnostics import main
+
+    raise typer.Exit(main())
+
+
 @app.command("web")
 def web(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),

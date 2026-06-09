@@ -89,6 +89,23 @@ Point all analysts at one baseline location (a network share or mounted
 object store) via ~/.plumb/baselines.yml ({kind: shared, path: ...}) or
 PLUMB_BASELINE_DIR. Never a Snowflake write (ADR-0012).
 
+## Troubleshooting
+
+If anything will not start (for example `ModuleNotFoundError: No module named
+'uvicorn'`), run the self-check first:
+
+```
+plumb doctor                    # installed CLI
+python scripts/selfcheck.py     # from a source checkout
+check.bat                       # inside the portable build
+```
+
+It reports every runtime dependency, every module import, the engine, and the
+web app as PASS or FAIL, so a missing dependency or broken import is named
+exactly instead of surfacing as a cryptic traceback at launch. In the portable
+build, always start with `run.bat` (it uses the bundled Python); double-clicking
+`run_plumb.py` can pick a different Python that lacks the dependencies.
+
 ## Project state
 
 Phases 0, 1, and 2 are complete: SQL engine, Tableau static analysis, web
