@@ -8,9 +8,30 @@ from plumb.checks.sql_static import (
     s_stat_012,
     s_stat_013,
     s_stat_014,
+    s_stat_015,
 )
 from plumb.engine.models import Severity, Status
 from tests._fakes import make_ctx
+
+
+def test_integration_layer_read_flags_when_configured():
+    from plumb.config.models import Ruleset
+
+    rs = Ruleset(version="1", integration_layer_patterns=["IL"])
+    ctx = make_ctx("SELECT id FROM X_PRD_IL.SALES.ORDERS", ruleset=rs)
+    assert s_stat_015(ctx, {}).status is Status.FAIL
+    # off by default (no patterns) so other teams are not surprised
+    assert s_stat_015(make_ctx("SELECT id FROM X_PRD_IL.SALES.ORDERS"), {}).status is Status.SKIP
+
+
+def test_raw_layer_is_a_blocker_in_the_shipped_ruleset():
+    from pathlib import Path
+
+    from plumb.config.loader import load_ruleset
+
+    rs = load_ruleset(Path("rules/plumb.yml"), enforce_pin=False)
+    res = s_stat_013(make_ctx("SELECT id FROM X_PRD_RL.SALES.ORDERS", ruleset=rs), {})
+    assert res.status is Status.FAIL and res.severity is Severity.BLOCKER
 
 
 def test_sandbox_reference_fails_high():

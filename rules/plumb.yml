@@ -28,8 +28,12 @@ sandbox_patterns:
   - DEV
 raw_layer_patterns:
   - RL
+integration_layer_patterns:
+  - IL
 
-severity_overrides: {}
+# Reading the raw layer is a hard fail (wrong grain, no business rules).
+severity_overrides:
+  S-STAT-013: BLOCKER
 
 thresholds:
   null_rate_default: 0.0
@@ -67,6 +71,8 @@ checks:
   - id: S-STAT-013
     enabled: true
   - id: S-STAT-014
+    enabled: true
+  - id: S-STAT-015
     enabled: true
   - id: S-META-001
     enabled: true

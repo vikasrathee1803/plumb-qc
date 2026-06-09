@@ -110,6 +110,9 @@ class Ruleset(BaseModel):
     certified_sources: list[str] = Field(default_factory=list)
     sandbox_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_SANDBOX_PATTERNS))
     raw_layer_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_RAW_LAYER_PATTERNS))
+    # An intermediate layer analysts are steered away from (build on presentation
+    # instead). Org-specific, so off unless configured.
+    integration_layer_patterns: list[str] = Field(default_factory=list)
     severity_overrides: dict[str, Severity] = Field(default_factory=dict)
     thresholds: Thresholds = Field(default_factory=Thresholds)
     pii_column_patterns: list[str] = Field(
@@ -162,6 +165,7 @@ class Profile(BaseModel):
     certified_sources: list[str] = Field(default_factory=list)
     sandbox_patterns: list[str] = Field(default_factory=list)
     raw_layer_patterns: list[str] = Field(default_factory=list)
+    integration_layer_patterns: list[str] = Field(default_factory=list)
     severity_overrides: dict[str, Severity] = Field(default_factory=dict)
     thresholds: dict[str, Any] = Field(default_factory=dict)
     pii_column_patterns: list[str] = Field(default_factory=list)

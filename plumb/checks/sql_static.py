@@ -426,6 +426,44 @@ def s_stat_013(ctx: CheckContext, params: dict):
 
 
 @register_check(
+    check_id="S-STAT-015",
+    name="Reads the integration layer instead of presentation",
+    family=CheckFamily.STATIC,
+    default_severity=Severity.HIGH,
+    execution_type=ExecutionType.STATIC,
+)
+def s_stat_015(ctx: CheckContext, params: dict):
+    try:
+        tree = _tree(ctx)
+    except SqlParseError as exc:
+        return error(ctx, "S-STAT-015", f"could not parse SQL: {exc}")
+    if tree is None:
+        return build_result(ctx, "S-STAT-015", Status.SKIP, observed="no SQL provided")
+    patterns = (
+        params.get("patterns") or getattr(ctx.ruleset, "integration_layer_patterns", []) or []
+    )
+    if not patterns:
+        return build_result(
+            ctx, "S-STAT-015", Status.SKIP, observed="no integration-layer patterns configured"
+        )
+    hits = _layer_hits(ctx.sql_text or "", patterns)
+    if hits:
+        names = ", ".join(f"{fqn} ({tok})" for fqn, tok in hits)
+        return build_result(
+            ctx,
+            "S-STAT-015",
+            Status.FAIL,
+            observed=f"reads the integration layer: {names}",
+            expected="build on the presentation layer (the certified, analyst-facing layer)",
+            remediation=(
+                "The integration layer is modeled but not the final analyst-facing layer; "
+                "its grain or business rules can still change. Point at the presentation view."
+            ),
+        )
+    return build_result(ctx, "S-STAT-015", Status.PASS, observed="no integration-layer references")
+
+
+@register_check(
     check_id="S-STAT-014",
     name="Outer join turned into an inner join by a WHERE filter",
     family=CheckFamily.STATIC,

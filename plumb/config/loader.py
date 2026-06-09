@@ -116,6 +116,7 @@ def resolve_profile(base: Ruleset, profile: Profile) -> Ruleset:
         "pii_column_patterns",
         "sandbox_patterns",
         "raw_layer_patterns",
+        "integration_layer_patterns",
     ):
         base_items: list[str] = merged[list_field]
         extra = [x for x in getattr(profile, list_field) if x not in base_items]
