@@ -25,9 +25,15 @@ def test_sandbox_does_not_false_positive_on_device():
     assert res.status is Status.PASS  # DEVICE must not match the DEV token
 
 
+def test_layer_match_ignores_the_table_name():
+    # the layer is a database/schema convention; a token in the table name
+    # (a presentation table happening to be called DEV_METRICS) is not a hit
+    assert s_stat_012(make_ctx("SELECT * FROM PROD.MART.DEV_METRICS"), {}).status is Status.PASS
+
+
 def test_raw_layer_direct_reference_fails():
     assert s_stat_013(make_ctx("SELECT * FROM RAW.SALESFORCE.ACCOUNT"), {}).status is Status.FAIL
-    assert s_stat_013(make_ctx("SELECT * FROM ANALYTICS.STG_ORDERS"), {}).status is Status.FAIL
+    assert s_stat_013(make_ctx("SELECT * FROM MYDB.STG.ORDERS"), {}).status is Status.FAIL
     assert s_stat_013(make_ctx("SELECT * FROM ANALYTICS.MART.ORDERS"), {}).status is Status.PASS
 
 

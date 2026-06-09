@@ -328,9 +328,11 @@ def s_stat_007(ctx: CheckContext, params: dict):
 
 
 def _layer_hits(sql: str, patterns: list[str]) -> list[tuple[str, str]]:
-    """Table refs whose database, schema, or name carries a layer token, as
-    (fully-qualified name, matched token). Matched token-wise (split on _) so
-    DEVICE is not mistaken for DEV and STG_ORDERS matches STG."""
+    """Table refs whose database or schema carries a layer token, as
+    (fully-qualified name, matched token). The layer is a database/schema
+    convention (e.g. X_DEV_RL.SCH.T or RAW.ORDERS), so only those parts are
+    matched - never the table name, where a token like DEV or RL would be a
+    false positive. Matched token-wise (split on _) so DEVICE is not DEV."""
     from plumb.checks._sql import extract_table_refs
 
     pats = {p.upper() for p in patterns if p}
@@ -339,7 +341,7 @@ def _layer_hits(sql: str, patterns: list[str]) -> list[tuple[str, str]]:
     hits: list[tuple[str, str]] = []
     for ref in extract_table_refs(sql):
         tokens: set[str] = set()
-        for part in (ref.catalog, ref.db, ref.name):
+        for part in (ref.catalog, ref.db):  # database and schema, not the table
             if not part:
                 continue
             upper = part.upper()

@@ -17,6 +17,18 @@ deprecated_objects: []
 
 certified_sources: []
 
+# Layer governance, matched token-wise against a reference's database/schema/name
+# (so X_DEV_RL.SCH.T flags DEV and RL). Convention: X_<ENV>_<LAYER>, env in
+# {SBX,TST,DEV,PRD}, layer in {RL raw, IL integration, PL presentation}. A
+# production build should read X_PRD_PL / X_PRD_IL, never a non-prod env or the
+# raw layer. Adjust these to your own naming.
+sandbox_patterns:
+  - SBX
+  - TST
+  - DEV
+raw_layer_patterns:
+  - RL
+
 severity_overrides: {}
 
 thresholds:
