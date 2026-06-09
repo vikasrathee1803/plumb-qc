@@ -45,15 +45,29 @@ Exit codes for CI: 0 passing, 1 REVIEW, 2 BLOCKED, 3 tool error.
 - Auth is key-pair, externalbrowser SSO, or OAuth. No passwords, no
   secrets in config or source.
 
-## Web UI (Phase 2)
+## Run it (web UI)
+
+One click, nothing to type: double-click **`run.bat`** (Windows) or run
+**`./run.sh`** (macOS/Linux). It builds the UI on first run, then opens
+http://127.0.0.1:8000. For a machine with no Python or Node at all, use the
+portable build instead (`dist_portable/Plumb-Portable-Windows-x64.zip`: unzip,
+double-click `run.bat`, nothing to install).
+
+Or run it by hand:
 
 ```
 cd web/ui && npm install && npm run build      # once
 plumb web                                       # serves API + SPA on :8000
 ```
 
-The web UI wraps the same engine and renders the same verdict, coverage,
-and report as the CLI. Run a SQL check or upload a .twb/.twbx.
+The web UI wraps the same engine and renders the same verdict, coverage, and
+report as the CLI. Run a SQL check, upload a .twb/.twbx, open the query map, or
+configure your Snowflake/Tableau connection from the gear icon (credentials stay
+local: config in ~/.plumb, secrets in your OS keychain).
+
+Frontend hot-reload (for development): `cd web/ui && npm run dev` starts the
+backend and Vite together (Vite on :5173 proxies /api to :8000). It sets
+PLUMB_DISABLE_AUTH for loopback dev only; `plumb web` keeps the API token on.
 
 ## AI assist (Phase 2, opt-in)
 

@@ -35,6 +35,15 @@ def test_spa_shell_sets_the_token_cookie():
     assert "plumb_token" in r.cookies or "set-cookie" in {k.lower() for k in r.headers}
 
 
+def test_disable_auth_bypasses_token_for_local_dev(monkeypatch):
+    """PLUMB_DISABLE_AUTH lets the Vite dev server reach the API without the
+    cookie. The default (auth on) is unchanged."""
+    monkeypatch.setenv("PLUMB_DISABLE_AUTH", "1")
+    dev = TestClient(create_app())  # no token header
+    assert dev.get("/api/profiles").status_code == 200
+    assert dev.post("/api/lineage", json={"sql": "SELECT a FROM t"}).status_code == 200
+
+
 def test_web_run_is_audited():
     import json
 

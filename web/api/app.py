@@ -368,18 +368,32 @@ def create_app() -> FastAPI:
     # with PLUMB_API_TOKEN.
     api_token = os.environ.get("PLUMB_API_TOKEN") or secrets.token_urlsafe(24)
     app.state.api_token = api_token
+    # Local-dev escape hatch: PLUMB_DISABLE_AUTH skips the token so the Vite dev
+    # server (which serves its own SPA shell, so the cookie is never set) can
+    # talk to the API. Loopback dev only; never set it for a shared deployment.
+    disable_auth = os.environ.get("PLUMB_DISABLE_AUTH", "").lower() in ("1", "true", "yes")
+    app.state.auth_disabled = disable_auth
+    if disable_auth:
+        import logging
+
+        logging.getLogger("uvicorn.error").warning(
+            "PLUMB_DISABLE_AUTH is set: the API token is NOT enforced. "
+            "Use this only for local development on 127.0.0.1."
+        )
     _OPEN_PATHS = {"/api/health"}
 
     @app.middleware("http")
     async def _require_token(request: Request, call_next: Any) -> Any:
         path = request.url.path
-        if path.startswith("/api/") and path not in _OPEN_PATHS:
+        if not disable_auth and path.startswith("/api/") and path not in _OPEN_PATHS:
             presented = request.headers.get("X-Plumb-Token") or request.cookies.get("plumb_token")
             if not presented or not secrets.compare_digest(presented, api_token):
                 return JSONResponse({"detail": "unauthorized"}, status_code=401)
         response = await call_next(request)
         # Hand the token to the browser when it loads the SPA shell.
-        if path == "/" or response.headers.get("content-type", "").startswith("text/html"):
+        if not disable_auth and (
+            path == "/" or response.headers.get("content-type", "").startswith("text/html")
+        ):
             response.set_cookie(
                 "plumb_token", api_token, httponly=True, samesite="strict", path="/"
             )
