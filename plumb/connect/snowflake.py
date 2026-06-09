@@ -212,9 +212,31 @@ class QueryResult:
     query_id: str | None = None
 
 
+def _isolate_snowflake_config() -> None:
+    """Point the connector at a clean, Plumb-owned config dir so it never reads
+    (and chokes on) a malformed ~/.snowflake/connections.toml.
+
+    The driver always loads connections.toml/config.toml from SNOWFLAKE_HOME
+    (or ~/.snowflake) while connecting; a corrupt file there fails the whole
+    connect with "An unknown error happened while loading ...connections.toml",
+    even though Plumb supplies every connection parameter explicitly and never
+    uses that file. The connector resolves the path at import time, so this must
+    run before it is imported. A pre-existing SNOWFLAKE_HOME is left untouched.
+    """
+    if os.environ.get("SNOWFLAKE_HOME"):
+        return
+    from plumb.config.loader import PLUMB_HOME
+
+    home = PLUMB_HOME / "snowflake"
+    home.mkdir(parents=True, exist_ok=True)
+    os.environ["SNOWFLAKE_HOME"] = str(home)
+
+
 def _default_connection_factory(**kwargs: Any) -> Any:
     # Imported lazily so the guard and kwargs assembly stay testable and
-    # importable without the driver loaded.
+    # importable without the driver loaded. Isolate the connector's config dir
+    # first (see _isolate_snowflake_config), before the import resolves it.
+    _isolate_snowflake_config()
     import snowflake.connector
 
     return snowflake.connector.connect(**kwargs)

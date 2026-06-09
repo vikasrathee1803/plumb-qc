@@ -1,6 +1,7 @@
 """Tests for session guardrails: query tag, timeout, warehouse, role,
 row cap, auth path assembly, and that no secret or password can appear."""
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,27 @@ def make_profile(authenticator: str = "externalbrowser", **overrides: Any) -> Co
     }
     data.update(overrides)
     return ConnectionProfile.model_validate(data)
+
+
+def test_isolate_snowflake_config_redirects_when_unset(monkeypatch, tmp_path):
+    """An unset SNOWFLAKE_HOME is redirected to a clean Plumb-owned dir so the
+    connector cannot choke on a malformed ~/.snowflake/connections.toml."""
+    monkeypatch.delenv("SNOWFLAKE_HOME", raising=False)
+    monkeypatch.setattr("plumb.config.loader.PLUMB_HOME", tmp_path)
+    snow._isolate_snowflake_config()
+    assert os.environ["SNOWFLAKE_HOME"] == str(tmp_path / "snowflake")
+    assert (tmp_path / "snowflake").is_dir()
+    # It must not plant a connections.toml; a missing file is simply skipped.
+    assert not (tmp_path / "snowflake" / "connections.toml").exists()
+
+
+def test_isolate_snowflake_config_respects_existing_home(monkeypatch, tmp_path):
+    """A SNOWFLAKE_HOME the user set deliberately is left untouched."""
+    chosen = str(tmp_path / "user_choice")
+    monkeypatch.setenv("SNOWFLAKE_HOME", chosen)
+    monkeypatch.setattr("plumb.config.loader.PLUMB_HOME", tmp_path)
+    snow._isolate_snowflake_config()
+    assert os.environ["SNOWFLAKE_HOME"] == chosen
 
 
 class FakeCursor:
