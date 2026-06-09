@@ -524,6 +524,14 @@ table.ev th { color: var(--fg-4); } table.ev td { font-family: ui-monospace, Men
 .map-svg .cnode .crow.on .ctext { fill: var(--fg-1); font-weight: 600; }
 .map-svg .cnode .crow.on .cdot { fill: var(--ai-2); }
 .map-svg .cnode .crow.dim { opacity: 0.3; }
+/* Click-through-to-column selection: the clicked block is ringed, the rest dims. */
+.map-svg .cnode { transition: opacity 0.18s; }
+.map-svg .cnode.dim { opacity: 0.16; }
+.map-svg .cnode-head { fill: transparent; cursor: pointer; }
+.map-svg .cnode .nkind, .map-svg .cnode .nlabel { pointer-events: none; }
+.map-svg .node.selected .nbox,
+.map-svg .cnode.selected .nbox { stroke: var(--ai-2); stroke-width: 2.8;
+  filter: drop-shadow(0 0 22px var(--ai-edge)); }
 
 /* Rich hover tooltip */
 .maptip { position: fixed; z-index: 70; pointer-events: none; max-width: 280px;

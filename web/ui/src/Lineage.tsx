@@ -171,12 +171,30 @@ export function LineageMap({ open, onClose, sql, result }: {
   const [selected, setSelected] = useState<string | null>(null);
   const [cols, setCols] = useState(false);
   const [hotCol, setHotCol] = useState<{ id: string; col: string } | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);  // the block clicked into
 
   useEffect(() => {
     if (!open) return;
-    setGraph(null); setError(""); setZoom(1); setHover(null); setSelected(null); setHotCol(null);
+    setGraph(null); setError(""); setZoom(1); setHover(null); setSelected(null);
+    setHotCol(null); setPinned(null);
     fetchLineage(sql).then(setGraph).catch((e) => setError(String(e.message ?? e)));
   }, [open, sql]);
+
+  // Click a block -> drop to column level focused on it. Its lineage (the block
+  // plus everything it joins to) stays lit; the rest dims.
+  function pinBlock(id: string) {
+    setPinned((p) => (p === id ? null : id));
+    setCols(true);
+  }
+  const pinnedRelated = useMemo(() => {
+    if (!pinned || !graph) return null;
+    const set = new Set<string>([pinned]);
+    for (const e of graph.edges) {
+      if (e.source === pinned) set.add(e.target);
+      if (e.target === pinned) set.add(e.source);
+    }
+    return set;
+  }, [pinned, graph]);
 
   const findings: CheckResult[] = (result?.checks ?? []).filter(
     (c) => STRUCTURAL.has(c.id) && (c.status === "FAIL" || c.status === "ERROR" || c.status === "WARN")
@@ -359,7 +377,8 @@ export function LineageMap({ open, onClose, sql, result }: {
         {!graph && !error && <div className="empty">Mapping your query…</div>}
         {graph && (cols ? clay : lay) && (
           <svg width={canvasW * zoom} height={canvasH * zoom}
-            viewBox={`0 0 ${canvasW} ${canvasH}`} className={`map-svg ${cols ? "colmode" : ""}`}>
+            viewBox={`0 0 ${canvasW} ${canvasH}`} className={`map-svg ${cols ? "colmode" : ""}`}
+            onClick={() => setPinned(null)}>
             <defs>
               <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3"
                 orient="auto" markerUnits="strokeWidth">
@@ -379,8 +398,12 @@ export function LineageMap({ open, onClose, sql, result }: {
               const sx = s.x + COL_W, tx = t.x;
               const dx = Math.max(40, (tx - sx) / 2);
               const d = `M${sx},${sy} C${sx + dx},${sy} ${tx - dx},${ty} ${tx},${ty}`;
-              const hot = trace?.threads.has(`${ei}:${li}`) ?? false;
-              const dim = trace != null && !hot;
+              let hot = false, dim = false;
+              if (trace != null) {
+                hot = trace.threads.has(`${ei}:${li}`); dim = !hot;
+              } else if (pinned != null) {
+                hot = e.source === pinned || e.target === pinned; dim = !hot;
+              }
               return (
                 <path key={`${ei}:${li}`} d={d}
                   className={`thread ${e.risk ? "risk" : ""} ${hot ? "hot" : ""} ${dim ? "dim" : ""}`} />
@@ -389,6 +412,9 @@ export function LineageMap({ open, onClose, sql, result }: {
 
             {cols && clay && Object.values(clay.placed).map((cp) => (
               <ColumnNode key={cp.node.id} cp={cp} endpoints={trace?.endpoints ?? null} traceKey={trace?.key}
+                selected={pinned === cp.node.id}
+                dim={pinnedRelated != null && !pinnedRelated.has(cp.node.id)}
+                onSelect={() => setPinned((p) => (p === cp.node.id ? null : cp.node.id))}
                 onCol={(col, ev) => showColTip(cp.node.id, cp.node.label, col, ev)}
                 onMove={(ev) => setTip((tp) => (tp ? { ...tp, x: ev.clientX, y: ev.clientY } : tp))}
                 onLeave={() => { setHotCol(null); setTip(null); }} />
@@ -439,6 +465,7 @@ export function LineageMap({ open, onClose, sql, result }: {
               else if (hover != null) dim = !neighbors.has(node.id);
               return (
                 <Node key={node.id} node={node} x={x} y={y} dim={dim} linked={linked}
+                  onSelect={() => pinBlock(node.id)}
                   onEnter={(ev) => showNodeTip(node, ev)}
                   onMove={(ev) => setTip((t) => (t ? { ...t, x: ev.clientX, y: ev.clientY } : t))}
                   onLeave={() => { setHover(null); setTip(null); }} />
@@ -460,8 +487,9 @@ export function LineageMap({ open, onClose, sql, result }: {
   );
 }
 
-function Node({ node, x, y, dim, linked, onEnter, onMove, onLeave }: {
+function Node({ node, x, y, dim, linked, onSelect, onEnter, onMove, onLeave }: {
   node: LineageNode; x: number; y: number; dim: boolean; linked: boolean;
+  onSelect: () => void;
   onEnter: (e: { clientX: number; clientY: number }) => void;
   onMove: (e: { clientX: number; clientY: number }) => void;
   onLeave: () => void;
@@ -469,7 +497,9 @@ function Node({ node, x, y, dim, linked, onEnter, onMove, onLeave }: {
   const hasFlag = node.flags.length > 0;
   const badge = nodeBadge(node);
   return (
-    <g className={`node ${dim ? "dim" : ""} ${linked ? "linked" : ""}`} transform={`translate(${x},${y})`}
+    <g className={`node clickable ${dim ? "dim" : ""} ${linked ? "linked" : ""}`}
+      transform={`translate(${x},${y})`}
+      onClick={(ev) => { ev.stopPropagation(); onSelect(); }}
       onMouseEnter={onEnter} onMouseMove={onMove} onMouseLeave={onLeave}>
       <rect width={NODE_W} height={NODE_H} rx={14} className={`nbox k-${node.kind}`} />
       <rect width={5} height={NODE_H} rx={2} className={`naccent k-${node.kind}`} />
@@ -489,10 +519,13 @@ function nodeBadge(n: LineageNode): string {
   return parts.join(" · ");
 }
 
-function ColumnNode({ cp, endpoints, traceKey, onCol, onMove, onLeave }: {
+function ColumnNode({ cp, endpoints, traceKey, selected, dim, onSelect, onCol, onMove, onLeave }: {
   cp: ColPlaced;
   endpoints: Set<string> | null;
   traceKey?: (id: string, c: string) => string;
+  selected: boolean;
+  dim: boolean;
+  onSelect: () => void;
   onCol: (col: string, e: { clientX: number; clientY: number }) => void;
   onMove: (e: { clientX: number; clientY: number }) => void;
   onLeave: () => void;
@@ -500,9 +533,11 @@ function ColumnNode({ cp, endpoints, traceKey, onCol, onMove, onLeave }: {
   const { node, x, y, h, rows } = cp;
   const calcNames = new Set(node.calculations.map((c) => c.split(" = ")[0]));
   return (
-    <g className="cnode" transform={`translate(${x},${y})`}>
+    <g className={`cnode ${selected ? "selected" : ""} ${dim ? "dim" : ""}`} transform={`translate(${x},${y})`}>
       <rect width={COL_W} height={h} rx={14} className={`nbox k-${node.kind}`} />
       <rect width={5} height={h} rx={2} className={`naccent k-${node.kind}`} />
+      <rect className="cnode-head" width={COL_W} height={COL_HEADER_H} rx={14}
+        onClick={(ev) => { ev.stopPropagation(); onSelect(); }} />
       <text x={18} y={18} className="nkind">{KIND_LABEL[node.kind] ?? node.kind}</text>
       <text x={18} y={33} className="nlabel">{trim(node.label, 20)}</text>
       {rows.map((c, i) => {
