@@ -119,6 +119,39 @@ export interface LineageNode {
   filters: string[];
 }
 
+export interface SnowflakeSettings {
+  configured: boolean;
+  account?: string;
+  user?: string;
+  authenticator?: string;
+  private_key_path?: string | null;
+  role?: string;
+  warehouse?: string;
+  privileged_role?: boolean;
+  has_passphrase?: boolean;
+  has_oauth_token?: boolean;
+}
+
+export interface TableauSettings {
+  configured: boolean;
+  server?: string;
+  site?: string;
+  auth?: string;
+  pat_name?: string;
+  client_id?: string;
+  secret_id?: string;
+  username?: string;
+  has_secret?: boolean;
+}
+
+export interface TestResult {
+  ok: boolean;
+  role?: string;
+  warehouse?: string;
+  site?: string;
+  error?: string;
+}
+
 export interface ColumnLink {
   from_col: string;
   to_col: string;

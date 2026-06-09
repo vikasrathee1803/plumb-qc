@@ -154,6 +154,65 @@ def test_trend_accumulates_per_target():
     assert times == sorted(times)
 
 
+_SF_PAYLOAD = {
+    "account": "acct.region.azure", "user": "ANALYST", "authenticator": "snowflake_jwt",
+    "private_key_path": "/keys/plumb.p8", "role": "PLUMB_QC", "warehouse": "PLUMB_WH",
+    "passphrase": "s3cr3t-pass",
+}
+
+
+def test_snowflake_settings_save_get_and_secret_never_leaks():
+    assert client.post("/api/settings/snowflake", json=_SF_PAYLOAD).status_code == 200
+    g = client.get("/api/settings/snowflake").json()
+    assert g["configured"] and g["account"] == "acct.region.azure"
+    assert g["authenticator"] == "snowflake_jwt" and g["role"] == "PLUMB_QC"
+    assert g["has_passphrase"] is True  # stored, reported as a boolean
+    # the secret value and key are never returned in the response
+    assert "passphrase" not in g and "s3cr3t-pass" not in str(g)
+
+
+def test_snowflake_settings_validation_error_is_400():
+    bad = {k: v for k, v in _SF_PAYLOAD.items() if k != "private_key_path"}
+    bad.pop("passphrase", None)
+    r = client.post("/api/settings/snowflake", json=bad)  # jwt needs a key path
+    assert r.status_code == 400
+    assert "private_key_path" in r.json()["detail"]
+
+
+def test_connection_profile_model_refuses_password():
+    import pytest
+    from pydantic import ValidationError
+
+    from plumb.config.models import ConnectionProfile
+
+    with pytest.raises(ValidationError):
+        ConnectionProfile.model_validate({**_SF_PAYLOAD, "password": "nope"})
+
+
+def test_snowflake_settings_delete():
+    client.post("/api/settings/snowflake", json=_SF_PAYLOAD)
+    assert client.delete("/api/settings/snowflake").status_code == 200
+    assert client.get("/api/settings/snowflake").json()["configured"] is False
+
+
+def test_tableau_settings_pat_save_get_secret_isolation():
+    payload = {
+        "server": "https://10ax.online.tableau.com", "site": "analytics",
+        "auth": "pat", "pat_name": "plumb-token", "secret": "tok-value-123",
+    }
+    assert client.post("/api/settings/tableau", json=payload).status_code == 200
+    g = client.get("/api/settings/tableau").json()
+    assert g["configured"] and g["auth"] == "pat" and g["pat_name"] == "plumb-token"
+    assert g["has_secret"] is True
+    assert "secret" not in g and "tok-value-123" not in str(g)
+
+
+def test_settings_endpoints_require_token():
+    noauth = TestClient(create_app())
+    assert noauth.get("/api/settings/snowflake").status_code == 401
+    assert noauth.post("/api/settings/tableau", json={"server": "x"}).status_code == 401
+
+
 def test_connection_endpoint_reports_configuration():
     r = client.get("/api/connection")
     assert r.status_code == 200

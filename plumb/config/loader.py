@@ -11,6 +11,7 @@ When a pin exists, loading a ruleset whose version differs is an error.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,14 @@ from plumb.config.models import (
     ConnectionProfile,
     Profile,
     Ruleset,
+    TableauConnection,
 )
 
 PLUMB_HOME = Path.home() / ".plumb"
 PIN_FILE = PLUMB_HOME / "rules.pin"
-CONNECTION_FILE = PLUMB_HOME / "connection.yml"
+# Overridable so the settings page and tests never clobber a real profile.
+CONNECTION_FILE = Path(os.environ.get("PLUMB_CONNECTION_FILE") or (PLUMB_HOME / "connection.yml"))
+TABLEAU_FILE = Path(os.environ.get("PLUMB_TABLEAU_FILE") or (PLUMB_HOME / "tableau.yml"))
 BASELINES_CONFIG_FILE = PLUMB_HOME / "baselines.yml"
 ENV_BASELINE_DIR = "PLUMB_BASELINE_DIR"
 
@@ -138,6 +142,15 @@ def load_connection_profile(path: Path | None = None) -> ConnectionProfile:
     raw = load_yaml_mapping(target)
     try:
         return ConnectionProfile.model_validate(raw)
+    except ValidationError as exc:
+        raise ConfigError(_format_validation_error(target, exc)) from exc
+
+
+def load_tableau_connection(path: Path | None = None) -> TableauConnection:
+    target = path or TABLEAU_FILE
+    raw = load_yaml_mapping(target)
+    try:
+        return TableauConnection.model_validate(raw)
     except ValidationError as exc:
         raise ConfigError(_format_validation_error(target, exc)) from exc
 

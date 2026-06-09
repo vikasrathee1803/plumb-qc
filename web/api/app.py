@@ -20,22 +20,36 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from plumb import __version__
 from plumb.baseline.store import make_baseline_store
 from plumb.checks._sql import SqlParseError
 from plumb.checks._tableau import TableauParseError, parse_workbook
 from plumb.config.loader import (
+    CONNECTION_FILE,
     PLUMB_HOME,
+    TABLEAU_FILE,
     ConfigError,
     load_baseline_store_config,
     load_connection_profile,
     load_profile,
     load_ruleset,
+    load_tableau_connection,
     resolve_profile,
 )
 from plumb.config.models import CheckSpec, Ruleset
+from plumb.config.settings import (
+    delete_secret,
+    get_secret,
+    has_secret,
+    oauth_entry,
+    passphrase_entry,
+    tableau_app_entry,
+    tableau_pat_entry,
+    write_snowflake,
+    write_tableau,
+)
 from plumb.connect.snowflake import (
     AuthConfigError,
     SnowflakeConnectError,
@@ -133,6 +147,28 @@ class CheckConfig(BaseModel):
 
 class LineageRequest(BaseModel):
     sql: str
+
+
+class SnowflakeSettings(BaseModel):
+    account: str
+    user: str
+    authenticator: str  # snowflake_jwt | externalbrowser | oauth
+    private_key_path: str | None = None
+    role: str
+    warehouse: str
+    passphrase: str | None = None  # key passphrase -> keychain (None leaves as-is)
+    oauth_token: str | None = None  # -> keychain
+
+
+class TableauSettings(BaseModel):
+    server: str
+    site: str = ""
+    auth: str = "pat"  # pat | connected_app
+    pat_name: str | None = None
+    client_id: str | None = None
+    secret_id: str | None = None
+    username: str | None = None
+    secret: str | None = None  # token value / app secret -> keychain
 
 
 class SqlCheckRequest(BaseModel):
@@ -282,6 +318,16 @@ def _profile_changes(base: Ruleset, resolved: Ruleset) -> list[str]:
     if not changes:
         changes.append("The team default. Balanced gate, standard thresholds.")
     return changes
+
+
+def _first_error(exc: ValidationError) -> str:
+    """The first pydantic error as a readable 'field: message' string."""
+    errors = exc.errors()
+    if not errors:
+        return "invalid settings"
+    err = errors[0]
+    loc = ".".join(str(p) for p in err.get("loc", ())) or "settings"
+    return f"{loc}: {err.get('msg', 'invalid')}"
 
 
 def _sql_target_name(sql: str) -> str:
@@ -441,6 +487,129 @@ def create_app() -> FastAPI:
             "user": profile.user,
             "privileged_role": is_privileged_role(profile.role),
         }
+
+    # ---- Setup / connection settings (credentials stay local: config in
+    # ~/.plumb, secrets in the OS keychain; never returned in a response) ----
+
+    @app.get("/api/settings/snowflake")
+    def get_snowflake_settings() -> dict[str, Any]:
+        try:
+            p = load_connection_profile()
+        except ConfigError:
+            return {"configured": False}
+        return {
+            "configured": True,
+            "account": p.account, "user": p.user, "authenticator": p.authenticator,
+            "private_key_path": p.private_key_path, "role": p.role, "warehouse": p.warehouse,
+            "privileged_role": is_privileged_role(p.role),
+            "has_passphrase": has_secret(passphrase_entry(p.account, p.user)),
+            "has_oauth_token": has_secret(oauth_entry(p.account, p.user)),
+        }
+
+    @app.post("/api/settings/snowflake")
+    def save_snowflake_settings(req: SnowflakeSettings) -> dict[str, Any]:
+        data = {
+            "account": req.account, "user": req.user, "authenticator": req.authenticator,
+            "private_key_path": req.private_key_path, "role": req.role, "warehouse": req.warehouse,
+        }
+        try:
+            write_snowflake(data, passphrase=req.passphrase, oauth_token=req.oauth_token)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=_first_error(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/settings/snowflake/test")
+    def test_snowflake_connection() -> dict[str, Any]:
+        try:
+            prof = load_connection_profile()
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail="save the connection first") from exc
+        try:
+            session = SnowflakeSession(
+                prof, run_id=str(uuid.uuid4()), statement_timeout_s=30
+            ).open()
+            try:
+                r = session.execute("SELECT CURRENT_ROLE() AS role, CURRENT_WAREHOUSE() AS wh")
+            finally:
+                session.close()
+            row = r.rows[0] if r.rows else {}
+            return {"ok": True, "role": row.get("ROLE"), "warehouse": row.get("WH")}
+        except (AuthConfigError, SnowflakeConnectError, ConfigError) as exc:
+            return {"ok": False, "error": str(exc)[:300]}
+
+    @app.delete("/api/settings/snowflake")
+    def delete_snowflake_settings() -> dict[str, Any]:
+        try:
+            p = load_connection_profile()
+            delete_secret(passphrase_entry(p.account, p.user))
+            delete_secret(oauth_entry(p.account, p.user))
+        except ConfigError:
+            pass
+        if CONNECTION_FILE.exists():
+            CONNECTION_FILE.unlink()
+        return {"ok": True}
+
+    @app.get("/api/settings/tableau")
+    def get_tableau_settings() -> dict[str, Any]:
+        try:
+            c = load_tableau_connection()
+        except ConfigError:
+            return {"configured": False}
+        secret_set = (
+            has_secret(tableau_pat_entry(c.server, c.pat_name)) if c.auth == "pat" and c.pat_name
+            else has_secret(tableau_app_entry(c.server, c.secret_id)) if c.secret_id else False
+        )
+        return {
+            "configured": True, "server": c.server, "site": c.site, "auth": c.auth,
+            "pat_name": c.pat_name, "client_id": c.client_id, "secret_id": c.secret_id,
+            "username": c.username, "has_secret": secret_set,
+        }
+
+    @app.post("/api/settings/tableau")
+    def save_tableau_settings(req: TableauSettings) -> dict[str, Any]:
+        data = req.model_dump(exclude={"secret"})
+        try:
+            write_tableau(data, secret=req.secret)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=_first_error(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/settings/tableau/test")
+    def test_tableau_connection() -> dict[str, Any]:
+        try:
+            c = load_tableau_connection()
+        except ConfigError as exc:
+            raise HTTPException(
+                status_code=400, detail="save the Tableau connection first"
+            ) from exc
+        if c.auth != "pat" or not c.pat_name:
+            return {"ok": False, "error": "live test currently supports Personal Access Token auth"}
+        secret = get_secret(tableau_pat_entry(c.server, c.pat_name))
+        if not secret:
+            return {"ok": False, "error": "no token secret stored; save it first"}
+        try:
+            import tableauserverclient as tsc
+
+            auth = tsc.PersonalAccessTokenAuth(c.pat_name, secret, site_id=c.site)
+            server = tsc.Server(c.server, use_server_version=True)
+            with server.auth.sign_in(auth):
+                return {"ok": True, "site": c.site or "default"}
+        except Exception as exc:  # noqa: BLE001 - any Tableau error is a failed test
+            return {"ok": False, "error": str(exc)[:300]}
+
+    @app.delete("/api/settings/tableau")
+    def delete_tableau_settings() -> dict[str, Any]:
+        try:
+            c = load_tableau_connection()
+            if c.pat_name:
+                delete_secret(tableau_pat_entry(c.server, c.pat_name))
+            if c.secret_id:
+                delete_secret(tableau_app_entry(c.server, c.secret_id))
+        except ConfigError:
+            pass
+        if TABLEAU_FILE.exists():
+            TABLEAU_FILE.unlink()
+        return {"ok": True}
 
     @app.post("/api/check/sql")
     def check_sql(req: SqlCheckRequest) -> dict[str, Any]:

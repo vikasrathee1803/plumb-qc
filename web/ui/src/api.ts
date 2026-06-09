@@ -1,5 +1,6 @@
 import type {
-  About, CatalogCheck, CheckState, Connection, HistoryRun, LineageGraph, RunResult, Trend,
+  About, CatalogCheck, CheckState, Connection, HistoryRun, LineageGraph, RunResult,
+  SnowflakeSettings, TableauSettings, TestResult, Trend,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -7,6 +8,28 @@ async function getJSON<T>(url: string): Promise<T> {
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json() as Promise<T>;
 }
+
+async function sendJSON<T>(url: string, method: string, body?: unknown): Promise<T> {
+  const r = await fetch(url, {
+    method,
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { detail?: string }).detail ?? `${url}: ${r.status}`);
+  return j as T;
+}
+
+export const fetchSnowflakeSettings = () => getJSON<SnowflakeSettings>("/api/settings/snowflake");
+export const saveSnowflakeSettings = (b: Record<string, unknown>) =>
+  sendJSON<{ ok: boolean }>("/api/settings/snowflake", "POST", b);
+export const testSnowflake = () => sendJSON<TestResult>("/api/settings/snowflake/test", "POST", {});
+export const deleteSnowflake = () => sendJSON<{ ok: boolean }>("/api/settings/snowflake", "DELETE");
+export const fetchTableauSettings = () => getJSON<TableauSettings>("/api/settings/tableau");
+export const saveTableauSettings = (b: Record<string, unknown>) =>
+  sendJSON<{ ok: boolean }>("/api/settings/tableau", "POST", b);
+export const testTableau = () => sendJSON<TestResult>("/api/settings/tableau/test", "POST", {});
+export const deleteTableau = () => sendJSON<{ ok: boolean }>("/api/settings/tableau", "DELETE");
 
 export const fetchConnection = () => getJSON<Connection>("/api/connection");
 export const fetchAbout = () => getJSON<About>("/api/about");

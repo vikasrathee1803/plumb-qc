@@ -203,3 +203,43 @@ class ConnectionProfile(BaseModel):
                 "authenticator snowflake_jwt requires private_key_path"
             )
         return self
+
+
+class TableauConnection(BaseModel):
+    """Tableau Server / Cloud connection. Auth is a Personal Access Token or a
+    Connected App (JWT); the token value or app secret lives in the OS keychain,
+    never in this file. Password auth is not supported."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server: str = Field(min_length=1)  # https://10ax.online.tableau.com or your server URL
+    site: str = ""  # site content url; empty string is the default site
+    auth: Literal["pat", "connected_app"] = "pat"
+    pat_name: str | None = None  # PAT: the token name (secret value in keychain)
+    client_id: str | None = None  # Connected App: client id
+    secret_id: str | None = None  # Connected App: secret id (secret value in keychain)
+    username: str | None = None  # Connected App: the user to act as (JWT sub)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_password(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in data:
+                if "password" in str(key).lower():
+                    raise ValueError(
+                        "password auth is not supported for Tableau; use a "
+                        "Personal Access Token or a Connected App"
+                    )
+        return data
+
+    @model_validator(mode="after")
+    def _auth_fields(self) -> "TableauConnection":
+        if self.auth == "pat" and not self.pat_name:
+            raise ValueError("pat auth requires pat_name")
+        if self.auth == "connected_app" and not (
+            self.client_id and self.secret_id and self.username
+        ):
+            raise ValueError(
+                "connected_app auth requires client_id, secret_id, and username"
+            )
+        return self
