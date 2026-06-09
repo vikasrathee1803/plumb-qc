@@ -209,6 +209,25 @@ textarea:focus, input:focus { border-color: var(--ai-edge); box-shadow: 0 0 0 4p
 .rdot.d-READY_WITH_NOTES { background: var(--info); } .rdot.d-READY { background: var(--pos); }
 .recent-chip.all { color: var(--ai-2); border-color: var(--ai-edge); background: var(--ai-soft); font-weight: 600; }
 
+/* Build setup: surfaced, auto-filled inputs for the column checks */
+.bsetup { border: 1px solid var(--line-1); border-radius: 14px; padding: 13px 15px; margin: 12px 0 4px;
+  background: var(--bg-1); display: flex; flex-direction: column; gap: 11px; }
+.bs-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.bs-title { font-size: 13px; font-weight: 640; }
+.bs-sub { font-size: 11.5px; color: var(--fg-4); }
+.bs-field { display: flex; flex-direction: column; gap: 6px; }
+.bs-label { font-size: 12px; font-weight: 560; color: var(--fg-2); display: flex; align-items: baseline; gap: 8px; }
+.bs-hint { font-size: 11px; color: var(--fg-4); font-weight: 400; }
+.bs-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bs-chip { font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  background: var(--bg-3); border: 1px solid var(--line-2); color: var(--fg-3); transition: 0.12s; }
+.bs-chip:hover { border-color: var(--fg-4); }
+.bs-chip.on { background: var(--ai-soft, var(--accent)); border-color: var(--ai-edge, var(--accent));
+  color: var(--ai-edge, #fff); font-weight: 560; }
+.bs-select { font: inherit; font-size: 12.5px; color: var(--fg-1); background: var(--bg-2);
+  border: 1px solid var(--line-2); border-radius: 9px; padding: 6px 10px; outline: none; max-width: 280px; }
+.bs-select:focus { border-color: var(--ai-edge, var(--accent)); }
+
 /* Build-extraction note (shown when Plumb folds a view/CTAS/multi-step build) */
 .buildnote { display: flex; align-items: flex-start; gap: 9px; font-size: 12.5px; color: var(--fg-2);
   background: var(--ai-soft, var(--bg-2)); border: 1px solid var(--line-1); border-left: 3px solid var(--ai-edge, var(--accent));

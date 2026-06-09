@@ -4,7 +4,12 @@ so the same checks, lineage, and read-only guarantees apply."""
 import pytest
 
 from plumb.connect.snowflake import assert_read_only
-from plumb.engine.buildquery import BuildExtractError, extract_build_query
+from plumb.engine.buildquery import (
+    BuildExtractError,
+    extract_build_query,
+    output_columns,
+    suggest_column_roles,
+)
 
 
 def test_bare_select_passes_through():
@@ -59,3 +64,17 @@ def test_no_read_to_analyze_raises():
 def test_unparseable_raises():
     with pytest.raises(BuildExtractError):
         extract_build_query("SELEKT )(")
+
+
+def test_output_columns_and_role_suggestions():
+    cols = output_columns("SELECT order_id, order_date, total_amount, region FROM orders")
+    assert cols == ["order_id", "order_date", "total_amount", "region"]
+    s = suggest_column_roles(cols)
+    assert "order_id" in s["key"]
+    assert s["timestamp"] == ["order_date"]
+    assert "total_amount" in s["amount"]
+    assert "region" not in s["key"] + s["timestamp"] + s["amount"]
+
+
+def test_output_columns_unknown_for_select_star():
+    assert output_columns("SELECT * FROM t") == []

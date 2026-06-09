@@ -14,6 +14,7 @@ still sees a single SELECT downstream.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import sqlglot
@@ -142,3 +143,42 @@ def extract_build_query(sql: str) -> BuildQuery:
     if len(rebuilt) != 1 or not isinstance(rebuilt[0], _READ_ROOTS):
         raise BuildExtractError("could not reduce the build to a single SELECT")
     return BuildQuery(sql=build_sql, notes=notes, target_name=target_name)
+
+
+def output_columns(sql: str) -> list[str]:
+    """The output column names of a (single-read) build SQL, or [] if they
+    cannot be determined statically (e.g. SELECT *)."""
+    try:
+        node = sqlglot.parse_one(sql, read="snowflake")
+    except ParseError:
+        return []
+    if isinstance(node, exp.Subquery):
+        node = node.this
+    if isinstance(node, exp.SetOperation):
+        node = node.this
+    names = list(getattr(node, "named_selects", []) or [])
+    return [n for n in names if n and n != "*"]
+
+
+# Name patterns that hint at a column's role, so the UI can pre-fill the inputs
+# the column checks need instead of making the user remember them.
+_ROLE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "key": re.compile(r"(^id$|_id$|_key$|^key$|_pk$|_no$|number$|_code$)", re.IGNORECASE),
+    "timestamp": re.compile(r"(date|datetime|timestamp|_at$|_ts$|_dt$|^ts$|time$)", re.IGNORECASE),
+    "amount": re.compile(
+        r"(amount|amt|total|quantity|qty|price|cost|revenue|sales|balance)",
+        re.IGNORECASE,
+    ),
+}
+
+
+def suggest_column_roles(columns: list[str]) -> dict[str, list[str]]:
+    """Best-guess columns for each check input role, from their names. The UI
+    pre-fills the inputs with these so checks are configured by default."""
+    roles: dict[str, list[str]] = {role: [] for role in _ROLE_PATTERNS}
+    for col in columns:
+        for role, pattern in _ROLE_PATTERNS.items():
+            if pattern.search(col):
+                roles[role].append(col)
+    roles["timestamp"] = roles["timestamp"][:1]  # one freshness column is enough
+    return roles

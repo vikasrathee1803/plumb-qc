@@ -1,5 +1,5 @@
 import type {
-  About, CatalogCheck, CheckState, Connection, HistoryRun, LineageGraph, RunResult,
+  About, CatalogCheck, CheckState, ColumnsInfo, Connection, HistoryRun, LineageGraph, RunResult,
   SnowflakeSettings, TableauSettings, TestResult, Trend,
 } from "./types";
 
@@ -55,6 +55,10 @@ export const fetchHistory = (opts?: { limit?: number; q?: string }) => {
 export const fetchRun = (id: string) => getJSON<RunResult>(`/api/run/${id}`);
 export const fetchTrend = (target: string) =>
   getJSON<Trend>(`/api/trend?target=${encodeURIComponent(target)}`);
+
+export async function fetchColumns(sql: string): Promise<ColumnsInfo> {
+  return sendJSON<ColumnsInfo>("/api/columns", "POST", { sql });
+}
 
 export async function fetchLineage(sql: string): Promise<LineageGraph> {
   const r = await fetch("/api/lineage", {

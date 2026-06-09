@@ -5,6 +5,7 @@ import {
 } from "./api";
 import { Architecture } from "./Architecture";
 import { ChecksEditor, CustomChecksEditor } from "./Customize";
+import { BuildSetup } from "./BuildSetup";
 import { HistoryModal, RecentRuns } from "./History";
 import { LineageMap } from "./Lineage";
 import { Settings } from "./Settings";
@@ -185,7 +186,7 @@ function applyPreset(preset: Preset, catalog: CatalogCheck[], seed: CheckState[]
 
 function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: string[]; catalog: CatalogCheck[] }) {
   const [sql, setSql] = useState(SAMPLE_SQL);
-  const [presetId, setPresetId] = useState("customer_ltv");
+  const [presetId, setPresetId] = useState("recommended");
   const [standard, setStandard] = useState("");
   const [live, setLive] = useState(false);
   const [explain, setExplain] = useState(false);
@@ -252,6 +253,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
           </span>
           <textarea value={sql} rows={6} spellCheck={false} onChange={(e) => setSql(e.target.value)} />
         </label>
+        <BuildSetup sql={sql} checkState={checkState} setCheckState={setCheckState} />
         <div className="setup">
           <span className="desc"><b>{enabledCount}</b> checks · <b>{preset.label}</b> preset · <b>{standardLabel}</b> standard</span>
           <button className="linkbtn" onClick={() => setMapOpen(true)}>Map</button>

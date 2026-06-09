@@ -154,6 +154,11 @@ export interface TestResult {
   error?: string;
 }
 
+export interface ColumnsInfo {
+  columns: string[];
+  suggestions: { key?: string[]; timestamp?: string[]; amount?: string[] };
+}
+
 export interface ColumnLink {
   from_col: string;
   to_col: string;

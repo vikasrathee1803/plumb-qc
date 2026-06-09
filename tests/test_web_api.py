@@ -114,6 +114,23 @@ def test_check_sql_with_no_read_is_400():
     assert r.status_code == 400
 
 
+def test_columns_endpoint_detects_and_suggests():
+    sql = (
+        "CREATE VIEW v AS SELECT account_id, SUM(revenue) AS revenue, "
+        "MAX(updated_at) AS updated_at FROM t GROUP BY account_id"
+    )
+    body = client.post("/api/columns", json={"sql": sql}).json()
+    assert set(body["columns"]) == {"account_id", "revenue", "updated_at"}
+    assert "account_id" in body["suggestions"]["key"]
+    assert "updated_at" in body["suggestions"]["timestamp"]
+    assert "revenue" in body["suggestions"]["amount"]
+
+
+def test_columns_endpoint_empty_for_unparseable():
+    body = client.post("/api/columns", json={"sql": "SELEKT )("}).json()
+    assert body["columns"] == []
+
+
 def test_rulesets_lists_check_sets():
     r = client.get("/api/rulesets")
     assert r.status_code == 200

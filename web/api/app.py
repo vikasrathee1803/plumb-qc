@@ -57,7 +57,12 @@ from plumb.connect.snowflake import (
     SnowflakeSession,
     is_privileged_role,
 )
-from plumb.engine.buildquery import BuildExtractError, extract_build_query
+from plumb.engine.buildquery import (
+    BuildExtractError,
+    extract_build_query,
+    output_columns,
+    suggest_column_roles,
+)
 from plumb.engine.catalog import catalog as check_catalog
 from plumb.engine.lineage import build_lineage
 from plumb.engine.models import RunResult, Target
@@ -444,6 +449,20 @@ def create_app() -> FastAPI:
         if build.notes:
             payload["build_notes"] = build.notes
         return payload
+
+    @app.post("/api/columns")
+    def columns_for_build(req: LineageRequest) -> dict[str, Any]:
+        """The build's output columns and a best-guess of which fit each check
+        input (key, timestamp, amount), so the UI can surface and pre-fill the
+        inputs the column checks need instead of relying on hidden config."""
+        if not req.sql.strip():
+            return {"columns": [], "suggestions": {}}
+        try:
+            build = extract_build_query(req.sql)
+        except BuildExtractError:
+            return {"columns": [], "suggestions": {}}
+        cols = output_columns(build.sql)
+        return {"columns": cols, "suggestions": suggest_column_roles(cols)}
 
     @app.get("/api/checks")
     def checks() -> dict[str, Any]:
