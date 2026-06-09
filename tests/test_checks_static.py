@@ -4,6 +4,7 @@ from plumb.checks.sql_static import (
     s_stat_001,
     s_stat_002,
     s_stat_003,
+    s_stat_006,
     s_stat_010,
     s_stat_012,
     s_stat_013,
@@ -12,6 +13,15 @@ from plumb.checks.sql_static import (
 )
 from plumb.engine.models import Severity, Status
 from tests._fakes import make_ctx
+
+
+def test_check_detail_names_the_offenders_not_just_a_count():
+    res = s_stat_006(make_ctx("SELECT a FROM t WHERE dt = '2024-01-01' AND e = '2023-12-31'"), {})
+    assert res.status is Status.WARN
+    assert "2024-01-01" in (res.observed or "")  # the literal, not just "2 dates"
+    assert "dt = '2024-01-01'" in (res.observed or "")  # and its predicate
+    rows = res.evidence.sample_rows
+    assert rows and any("2024-01-01" in str(r) for r in rows)  # structured evidence too
 
 
 def test_integration_layer_read_flags_when_configured():

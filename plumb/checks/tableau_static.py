@@ -115,7 +115,7 @@ def t_lod_001(ctx: CheckContext, params: dict):
         ]
         return build_result(
             ctx, "T-LOD-001", Status.WARN,
-            observed=f"{len(fixed)} FIXED LOD calc(s); review for double counting",
+            observed=f"{len(fixed)} FIXED LOD calc(s): {', '.join(f.caption for f in fixed[:4])}",
             expected="confirm each FIXED LOD does not double count when blended or filtered",
             evidence_rows=rows,
             remediation="FIXED ignores viz filters; verify totals against the database grain.",
@@ -142,7 +142,8 @@ def t_calc_001(ctx: CheckContext, params: dict):
         rows = [{"field": f.caption, "formula": f.formula} for f in risky]
         return build_result(
             ctx, "T-CALC-001", Status.WARN,
-            observed=f"{len(risky)} calc(s) aggregate a per-row ratio or product",
+            observed=f"{len(risky)} calc(s) aggregate a per-row ratio/product: "
+            f"{', '.join(f.caption for f in risky[:4])}",
             expected="aggregate base measures, compute ratios at the right grain",
             evidence_rows=rows,
             remediation="Averaging a row-level ratio rarely matches the database grain.",
@@ -169,7 +170,8 @@ def t_calc_002(ctx: CheckContext, params: dict):
         rows = [{"field": f.caption, "formula": f.formula} for f in hardcoded]
         return build_result(
             ctx, "T-CALC-002", Status.WARN,
-            observed=f"{len(hardcoded)} calc(s) contain hardcoded literals",
+            observed=f"{len(hardcoded)} calc(s) with hardcoded literals: "
+            f"{', '.join(f.caption for f in hardcoded[:4])}",
             expected="drive thresholds and dates from parameters",
             evidence_rows=rows,
             remediation="Hardcoded numbers and dates silently go stale; parameterize them.",

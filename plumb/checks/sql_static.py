@@ -26,6 +26,35 @@ def _tree(ctx: CheckContext):
     return parse_one(ctx.sql_text)
 
 
+def _short(text: object, limit: int = 120) -> str:
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+_BIG_NODES = (exp.Select, exp.From, exp.Where, exp.Group, exp.Order, exp.Having, exp.With)
+
+
+def _context_of(node: exp.Expression) -> str:
+    """Render the predicate or expression around an offender so the report points
+    at exactly where to look. For a leaf (a literal, column, or star) that is its
+    enclosing predicate; never the whole clause."""
+    target: exp.Expression = node
+    if isinstance(node, (exp.Literal, exp.Column, exp.Star, exp.Null)) and node.parent is not None:
+        target = node.parent
+    if isinstance(target, _BIG_NODES):
+        target = node
+    return _short(target.sql(dialect="snowflake"))
+
+
+def _detail(items: list[str], rows: list[dict[str, object]], noun: str) -> tuple[str, list[dict]]:
+    """An observed string that names the first few offenders inline, plus the
+    full evidence rows. So '4 hardcoded dates' becomes '4 hardcoded dates:
+    o.dt = \\'2024-01-01\\'; ...' and the report lists each with its context."""
+    preview = "; ".join(items[:3])
+    observed = f"{len(items)} {noun}: {preview}" + (" …" if len(items) > 3 else "")
+    return _short(observed, 220), rows[:25]
+
+
 @register_check(
     check_id="S-LINT-001",
     name="Style and convention lint against org rules",
@@ -79,12 +108,26 @@ def s_stat_001(ctx: CheckContext, params: dict):
         if not isinstance(s.parent, exp.Count)
     ]
     if stars:
+        items: list[str] = []
+        rows: list[dict[str, object]] = []
+        for s in stars:
+            star_sql = s.sql(dialect="snowflake")
+            sel = s.find_ancestor(exp.Select)
+            tbls = (
+                list(dict.fromkeys(t.sql(dialect="snowflake") for t in sel.find_all(exp.Table)))
+                if sel is not None else []
+            )
+            src = ", ".join(tbls[:4])
+            items.append(f"SELECT {star_sql}" + (f" FROM {src}" if src else ""))
+            rows.append({"projection": star_sql, "from": src})
+        observed, evidence = _detail(items, rows, "SELECT * projection(s)")
         return build_result(
             ctx,
             "S-STAT-001",
             Status.FAIL,
-            observed=f"{len(stars)} SELECT * projection(s)",
+            observed=observed,
             expected="explicit column list",
+            evidence_rows=evidence,
             remediation="List the columns explicitly so the contract is stable.",
         )
     return build_result(ctx, "S-STAT-001", Status.PASS, observed="no SELECT *")
@@ -105,16 +148,24 @@ def s_stat_002(ctx: CheckContext, params: dict):
     if tree is None:
         return build_result(ctx, "S-STAT-002", Status.SKIP, observed="no SQL provided")
 
-    offenders = 0
+    offenders: list[str] = []
+    rows: list[dict[str, object]] = []
     # Explicit JOIN with no ON/USING and not a natural/cross-by-design join.
     for join in tree.find_all(exp.Join):
         kind = (join.kind or "").upper()
         if kind == "CROSS":
             continue
+        # Bare/comma joins (no kind, side, or method) are handled below, where
+        # we also check the WHERE - an old-style 'FROM a, b WHERE a.id=b.id' is a
+        # valid join, so flagging it here on the missing ON would be wrong.
+        if not join.kind and not join.side and not join.method:
+            continue
         if join.args.get("on") is None and not join.args.get("using"):
             if "NATURAL" in (join.method or "").upper():
                 continue
-            offenders += 1
+            tname = join.this.sql(dialect="snowflake") if join.this is not None else "?"
+            offenders.append(f"JOIN {tname} (no ON/USING)")
+            rows.append({"table": tname, "issue": "JOIN with no ON/USING"})
     # Comma joins: more than one table in a FROM with no WHERE linking them
     # is the classic accidental cartesian product.
     for select in tree.find_all(exp.Select):
@@ -126,15 +177,21 @@ def s_stat_002(ctx: CheckContext, params: dict):
             and not j.args.get("using") and not j.kind and not j.side
         ]
         if comma_tables and select.args.get("where") is None:
-            offenders += len(comma_tables)
+            base = from_.this.sql(dialect="snowflake") if from_.this is not None else "?"
+            for j in comma_tables:
+                tname = j.this.sql(dialect="snowflake") if j.this is not None else "?"
+                offenders.append(f"{base} , {tname} (comma join, no WHERE link)")
+                rows.append({"tables": f"{base}, {tname}", "issue": "comma join, no WHERE link"})
 
     if offenders:
+        observed, evidence = _detail(offenders, rows, "join(s) with no join condition")
         return build_result(
             ctx,
             "S-STAT-002",
             Status.FAIL,
-            observed=f"{offenders} join(s) with no join condition",
+            observed=observed,
             expected="every join has an ON or USING condition",
+            evidence_rows=evidence,
             remediation="Add the join key, or use explicit CROSS JOIN if intended.",
         )
     return build_result(ctx, "S-STAT-002", Status.PASS, observed="all joins have conditions")
@@ -154,12 +211,19 @@ def s_stat_003(ctx: CheckContext, params: dict):
         return error(ctx, "S-STAT-003", f"could not parse SQL: {exc}")
     if tree is None:
         return build_result(ctx, "S-STAT-003", Status.SKIP, observed="no SQL provided")
-    offenders = 0
+    offenders: list[str] = []
+    rows: list[dict[str, object]] = []
     # Snowflake parses NOT IN (subquery) as <> ALL(subquery): an All node
     # under a NEQ wrapping a Select. This is the NULL trap.
     for all_node in tree.find_all(exp.All):
-        if isinstance(all_node.parent, exp.NEQ) and all_node.find(exp.Select) is not None:
-            offenders += 1
+        if (
+            all_node.parent is not None
+            and isinstance(all_node.parent, exp.NEQ)
+            and all_node.find(exp.Select) is not None
+        ):
+            where = _short(all_node.parent.sql(dialect="snowflake"))
+            offenders.append(where)
+            rows.append({"predicate": where})
     # Other dialect shapes: NOT wrapping an IN with a subquery.
     for not_node in tree.find_all(exp.Not):
         inner = not_node.this
@@ -167,14 +231,18 @@ def s_stat_003(ctx: CheckContext, params: dict):
             inner.args.get("query") is not None
             or isinstance(inner.args.get("field"), exp.Select)
         ):
-            offenders += 1
+            where = _short(not_node.sql(dialect="snowflake"))
+            offenders.append(where)
+            rows.append({"predicate": where})
     if offenders:
+        observed, evidence = _detail(offenders, rows, "NOT IN (subquery) predicate(s)")
         return build_result(
             ctx,
             "S-STAT-003",
             Status.FAIL,
-            observed=f"{offenders} NOT IN (subquery) predicate(s)",
+            observed=observed,
             expected="NOT EXISTS instead of NOT IN with a subquery",
+            evidence_rows=evidence,
             remediation="Use NOT EXISTS; NOT IN returns no rows if the subquery has a NULL.",
         )
     return build_result(ctx, "S-STAT-003", Status.PASS, observed="no NOT IN subquery")
@@ -202,23 +270,30 @@ def s_stat_004(ctx: CheckContext, params: dict):
     for where in tree.find_all(exp.Where):
         predicates.append(where.this)
 
-    flagged = 0
+    flagged: list[str] = []
+    rows: list[dict[str, object]] = []
     for predicate in predicates:
         for cmp_node in predicate.find_all(exp.EQ, exp.NEQ, exp.GT, exp.LT, exp.GTE, exp.LTE):
             left, right = cmp_node.left, cmp_node.right
-            if _is_column(left) and _is_string_literal(right):
-                flagged += 1
-            elif _is_column(right) and _is_string_literal(left):
-                flagged += 1
-            elif isinstance(left, exp.Cast) or isinstance(right, exp.Cast):
-                flagged += 1
+            hit = (
+                (_is_column(left) and _is_string_literal(right))
+                or (_is_column(right) and _is_string_literal(left))
+                or isinstance(left, exp.Cast)
+                or isinstance(right, exp.Cast)
+            )
+            if hit:
+                where = _short(cmp_node.sql(dialect="snowflake"))
+                flagged.append(where)
+                rows.append({"predicate": where})
     if flagged:
+        observed, evidence = _detail(flagged, rows, "predicate(s) with a possible implicit cast")
         return build_result(
             ctx,
             "S-STAT-004",
             Status.WARN,
-            observed=f"{flagged} predicate(s) with a possible implicit cast",
+            observed=observed,
             expected="compare columns of matching types, cast explicitly",
+            evidence_rows=evidence,
             remediation="Confirm both sides share a type; an implicit cast can defeat pruning.",
         )
     return build_result(ctx, "S-STAT-004", Status.PASS, observed="no obvious implicit casts")
@@ -238,22 +313,27 @@ def s_stat_005(ctx: CheckContext, params: dict):
         return error(ctx, "S-STAT-005", f"could not parse SQL: {exc}")
     if tree is None:
         return build_result(ctx, "S-STAT-005", Status.SKIP, observed="no SQL provided")
-    flagged = 0
+    flagged: list[str] = []
+    rows: list[dict[str, object]] = []
     for where in tree.find_all(exp.Where):
         for cmp_node in where.find_all(exp.EQ, exp.NEQ, exp.GT, exp.LT, exp.GTE, exp.LTE):
             for side in (cmp_node.left, cmp_node.right):
                 if isinstance(side, exp.Func) and any(
                     isinstance(c, exp.Column) for c in side.find_all(exp.Column)
                 ):
-                    flagged += 1
+                    where_str = _short(cmp_node.sql(dialect="snowflake"))
+                    flagged.append(where_str)
+                    rows.append({"predicate": where_str, "wrapped": _short(side.sql("snowflake"))})
                     break
     if flagged:
+        observed, evidence = _detail(flagged, rows, "non-SARGable predicate(s)")
         return build_result(
             ctx,
             "S-STAT-005",
             Status.WARN,
-            observed=f"{flagged} non-SARGable predicate(s)",
+            observed=observed,
             expected="filter on the bare column where possible",
+            evidence_rows=evidence,
             remediation="Wrapping a filtered column in a function prevents partition pruning.",
         )
     return build_result(ctx, "S-STAT-005", Status.PASS, observed="no non-SARGable predicates")
@@ -273,17 +353,22 @@ def s_stat_006(ctx: CheckContext, params: dict):
         return error(ctx, "S-STAT-006", f"could not parse SQL: {exc}")
     if tree is None:
         return build_result(ctx, "S-STAT-006", Status.SKIP, observed="no SQL provided")
-    date_like = 0
+    items: list[str] = []
+    rows: list[dict[str, object]] = []
     for literal in tree.find_all(exp.Literal):
         if literal.is_string and _looks_like_date(literal.this):
-            date_like += 1
-    if date_like:
+            where = _context_of(literal)
+            items.append(where)
+            rows.append({"date": literal.sql(dialect="snowflake"), "in": where})
+    if items:
+        observed, evidence = _detail(items, rows, "hardcoded date literal(s)")
         return build_result(
             ctx,
             "S-STAT-006",
             Status.WARN,
-            observed=f"{date_like} hardcoded date literal(s)",
+            observed=observed,
             expected="parameterize dates or derive from a calendar",
+            evidence_rows=evidence,
             remediation="Hardcoded dates silently go stale; drive them from a parameter.",
         )
     return build_result(ctx, "S-STAT-006", Status.PASS, observed="no hardcoded dates")
@@ -537,19 +622,23 @@ def s_stat_008(ctx: CheckContext, params: dict):
         return error(ctx, "S-STAT-008", f"could not parse SQL: {exc}")
     if tree is None:
         return build_result(ctx, "S-STAT-008", Status.SKIP, observed="no SQL provided")
-    implicit = 0
+    offenders: list[str] = []
+    rows: list[dict[str, object]] = []
     for select in tree.find_all(exp.Select):
-        implicit += sum(
-            1 for j in select.args.get("joins", [])
-            if not j.kind and not j.side and not j.method and j.args.get("on")
-        )
-    if implicit:
+        for j in select.args.get("joins", []):
+            if not j.kind and not j.side and not j.method and j.args.get("on"):
+                tname = j.this.sql("snowflake") if j.this is not None else "?"
+                offenders.append(f"JOIN {tname}")
+                rows.append({"join": tname, "issue": "implicit join type (defaults to INNER)"})
+    if offenders:
+        observed, evidence = _detail(offenders, rows, "join(s) with an implicit type")
         return build_result(
             ctx,
             "S-STAT-008",
             Status.WARN,
-            observed=f"{implicit} join(s) with an implicit type",
+            observed=observed,
             expected="state INNER or LEFT explicitly",
+            evidence_rows=evidence,
             remediation="Write the join type out so intent is unambiguous to reviewers.",
         )
     return build_result(ctx, "S-STAT-008", Status.PASS, observed="all join types explicit")
@@ -569,17 +658,23 @@ def s_stat_010(ctx: CheckContext, params: dict):
         return error(ctx, "S-STAT-010", f"could not parse SQL: {exc}")
     if tree is None:
         return build_result(ctx, "S-STAT-010", Status.SKIP, observed="no SQL provided")
-    flagged = 0
+    offenders: list[str] = []
+    rows: list[dict[str, object]] = []
     for select in tree.find_all(exp.Select):
         if select.args.get("distinct") and select.args.get("joins"):
-            flagged += 1
-    if flagged:
+            tbls = list(dict.fromkeys(t.sql("snowflake") for t in select.find_all(exp.Table)))
+            src = ", ".join(tbls[:4])
+            offenders.append(f"SELECT DISTINCT over {src or 'a join'}")
+            rows.append({"from": src, "issue": "DISTINCT over a join (may mask fan-out)"})
+    if offenders:
+        observed, evidence = _detail(offenders, rows, "SELECT DISTINCT over a join")
         return build_result(
             ctx,
             "S-STAT-010",
             Status.WARN,
-            observed=f"{flagged} SELECT DISTINCT over a join",
+            observed=observed,
             expected="fix the grain rather than dedupe with DISTINCT",
+            evidence_rows=evidence,
             remediation="DISTINCT can hide a fan-out; confirm the join grain is correct.",
         )
     return build_result(ctx, "S-STAT-010", Status.PASS, observed="no DISTINCT-over-join")
@@ -599,7 +694,8 @@ def s_stat_011(ctx: CheckContext, params: dict):
         return error(ctx, "S-STAT-011", f"could not parse SQL: {exc}")
     if tree is None:
         return build_result(ctx, "S-STAT-011", Status.SKIP, observed="no SQL provided")
-    flagged = 0
+    offenders: list[str] = []
+    rows: list[dict[str, object]] = []
     for order in tree.find_all(exp.Order):
         # A sort inside a window (OVER ... ORDER BY) is functional; skip it.
         if order.find_ancestor(exp.Window) is not None:
@@ -611,14 +707,19 @@ def s_stat_011(ctx: CheckContext, params: dict):
         parent_select = order.find_ancestor(exp.Select)
         if parent_select is not None and parent_select.args.get("limit") is not None:
             continue
-        flagged += 1
-    if flagged:
+        name = enclosing.alias_or_name or "subquery"
+        order_sql = _short(order.sql("snowflake"))
+        offenders.append(f"{order_sql} in {name}")
+        rows.append({"order_by": order_sql, "in": name})
+    if offenders:
+        observed, evidence = _detail(offenders, rows, "ORDER BY in a subquery/CTE without LIMIT")
         return build_result(
             ctx,
             "S-STAT-011",
             Status.WARN,
-            observed=f"{flagged} ORDER BY inside a subquery or CTE without LIMIT",
+            observed=observed,
             expected="sort only in the outermost query",
+            evidence_rows=evidence,
             remediation="A subquery sort is discarded by the optimizer; sort in the final SELECT.",
         )
     return build_result(ctx, "S-STAT-011", Status.PASS, observed="no nested sorts")
