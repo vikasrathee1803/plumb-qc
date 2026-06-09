@@ -287,6 +287,11 @@ def _default_connection_factory(**kwargs: Any) -> Any:
     _isolate_snowflake_config()
     import snowflake.connector
 
+    # Bind parameters with qmark (?) and server-side binding. The only
+    # parameterized read is the Cortex assist call; ? both parses as a read for
+    # assert_read_only (the connector's default pyformat %s does not) and binds
+    # server-side, which is the safest. Other reads pass no params, so unaffected.
+    snowflake.connector.paramstyle = "qmark"
     return snowflake.connector.connect(**kwargs)
 
 
