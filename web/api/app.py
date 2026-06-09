@@ -9,6 +9,8 @@ connection; set static_only false to use the configured connection.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 import secrets
@@ -74,10 +76,19 @@ DEFAULT_RULES = REPO_ROOT / "rules" / "plumb.yml"
 PROFILES_DIR = REPO_ROOT / "rules" / "profiles"
 SPA_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
-# Reports are held in memory by run_id so the SPA can request the
-# self-contained HTML for the run it just executed. _HISTORY is the ordered
-# index (most recent first) for the recent-runs view.
+# Process-local app logger. A child of "uvicorn" so it inherits uvicorn's
+# handlers and formatting when run normally, and still works (via lastResort)
+# under the portable or tests.
+logger = logging.getLogger("uvicorn.error").getChild("plumb")
+
+# In-memory caches for the SPA. This is single-process, single-worker state by
+# design: Plumb is a local-first app bound to loopback and run with one uvicorn
+# worker, so a dict/list is correct and a shared store would be over-engineering.
+# A multi-worker deployment would instead read both from the persisted files
+# below (which already survive a restart). _REPORTS is a bounded LRU-ish cache
+# of recent run detail; older runs are reloaded from disk on demand.
 _REPORTS: dict[str, RunResult] = {}
+_REPORTS_MEM_CAP = 200
 _HISTORY: list[dict[str, Any]] = []  # most recent first
 _HISTORY_MEM_CAP = 1000
 # Reports and the run log are written here so shared links and trends
@@ -128,14 +139,20 @@ def _load_history() -> None:
 
 
 def _record(result: RunResult) -> None:
-    import json
-
     _REPORTS[result.run_id] = result
+    # Bound the in-memory cache; evict the oldest. Detail is reloaded from the
+    # persisted .json on demand (see run_detail), so eviction loses nothing.
+    while len(_REPORTS) > _REPORTS_MEM_CAP:
+        _REPORTS.pop(next(iter(_REPORTS)))
     entry = _history_entry(result)
     try:
         WEB_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         (WEB_REPORTS_DIR / f"{result.run_id}.html").write_text(
             render_html(result), encoding="utf-8"
+        )
+        # Persist the full result so an evicted run is still fully recoverable.
+        (WEB_REPORTS_DIR / f"{result.run_id}.json").write_text(
+            json.dumps(result.model_dump(mode="json")), encoding="utf-8"
         )
         with HISTORY_FILE.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
@@ -146,9 +163,7 @@ def _record(result: RunResult) -> None:
     except OSError as exc:
         # Never break a run on an unwritable reports/audit dir, but a silently
         # dropped audit record is a real risk, so make the failure visible.
-        import logging
-
-        logging.getLogger("uvicorn.error").warning(
+        logger.warning(
             "could not persist report/audit for run %s: %s", result.run_id, exc
         )
     _HISTORY.insert(0, entry)
@@ -391,9 +406,7 @@ def create_app() -> FastAPI:
     disable_auth = os.environ.get("PLUMB_DISABLE_AUTH", "").lower() in ("1", "true", "yes")
     app.state.auth_disabled = disable_auth
     if disable_auth:
-        import logging
-
-        logging.getLogger("uvicorn.error").warning(
+        logger.warning(
             "PLUMB_DISABLE_AUTH is set: the API token is NOT enforced. "
             "Use this only for local development on 127.0.0.1."
         )
@@ -851,10 +864,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/run/{run_id}")
     def run_detail(run_id: str) -> dict[str, Any]:
-        result = _REPORTS.get(run_id)
-        if result is None:
+        if not _RUN_ID_RE.match(run_id):
             raise HTTPException(status_code=404, detail="no run with that id")
-        return result.model_dump(mode="json")
+        result = _REPORTS.get(run_id)
+        if result is not None:
+            return result.model_dump(mode="json")
+        # Evicted from the in-memory cache: reload the persisted detail.
+        persisted = WEB_REPORTS_DIR / f"{run_id}.json"
+        if persisted.exists():
+            try:
+                return json.loads(persisted.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+        raise HTTPException(status_code=404, detail="no run with that id")
 
     @app.get("/api/profile")
     def profile_detail(name: str) -> dict[str, Any]:

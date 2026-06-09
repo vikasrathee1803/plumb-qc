@@ -131,6 +131,26 @@ def test_columns_endpoint_empty_for_unparseable():
     assert body["columns"] == []
 
 
+def test_run_detail_survives_cache_eviction(monkeypatch):
+    import web.api.app as appmod
+
+    appmod._REPORTS.clear()
+    monkeypatch.setattr(appmod, "_REPORTS_MEM_CAP", 1)
+    ids = []
+    for i in range(3):
+        body = {"sql": f"SELECT {i} AS a FROM t", "static_only": True}
+        r = client.post("/api/check/sql", json=body)
+        assert r.status_code == 200
+        ids.append(r.json()["run_id"])
+    assert ids[0] not in appmod._REPORTS  # evicted from the in-memory cache (cap 1)
+    detail = client.get(f"/api/run/{ids[0]}")  # still served, reloaded from disk
+    assert detail.status_code == 200 and detail.json()["run_id"] == ids[0]
+
+
+def test_run_detail_rejects_unsafe_id():
+    assert client.get("/api/run/..%2F..%2Fsecret").status_code == 404
+
+
 def test_tableau_upload_accepts_twbx_bundling_data():
     """A .twbx that bundles a data extract is checked from its .twb XML; the
     package size does not block it."""
