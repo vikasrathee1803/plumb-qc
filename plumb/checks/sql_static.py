@@ -327,6 +327,162 @@ def s_stat_007(ctx: CheckContext, params: dict):
     return build_result(ctx, "S-STAT-007", Status.PASS, observed="no deprecated references")
 
 
+def _layer_hits(sql: str, patterns: list[str]) -> list[tuple[str, str]]:
+    """Table refs whose database, schema, or name carries a layer token, as
+    (fully-qualified name, matched token). Matched token-wise (split on _) so
+    DEVICE is not mistaken for DEV and STG_ORDERS matches STG."""
+    from plumb.checks._sql import extract_table_refs
+
+    pats = {p.upper() for p in patterns if p}
+    if not pats:
+        return []
+    hits: list[tuple[str, str]] = []
+    for ref in extract_table_refs(sql):
+        tokens: set[str] = set()
+        for part in (ref.catalog, ref.db, ref.name):
+            if not part:
+                continue
+            upper = part.upper()
+            tokens.add(upper)
+            tokens.update(t for t in upper.split("_") if t)
+        matched = tokens & pats
+        if matched:
+            hits.append((ref.fqn(), sorted(matched)[0]))
+    return hits
+
+
+@register_check(
+    check_id="S-STAT-012",
+    name="Reads a sandbox, dev, or scratch object",
+    family=CheckFamily.STATIC,
+    default_severity=Severity.HIGH,
+    execution_type=ExecutionType.STATIC,
+)
+def s_stat_012(ctx: CheckContext, params: dict):
+    try:
+        tree = _tree(ctx)
+    except SqlParseError as exc:
+        return error(ctx, "S-STAT-012", f"could not parse SQL: {exc}")
+    if tree is None:
+        return build_result(ctx, "S-STAT-012", Status.SKIP, observed="no SQL provided")
+    patterns = params.get("patterns") or getattr(ctx.ruleset, "sandbox_patterns", []) or []
+    if not patterns:
+        return build_result(
+            ctx, "S-STAT-012", Status.SKIP, observed="no sandbox patterns configured"
+        )
+    hits = _layer_hits(ctx.sql_text or "", patterns)
+    if hits:
+        names = ", ".join(f"{fqn} ({tok})" for fqn, tok in hits)
+        return build_result(
+            ctx,
+            "S-STAT-012",
+            Status.FAIL,
+            observed=f"reads sandbox/dev object(s): {names}",
+            expected="every source is a production object",
+            remediation=(
+                "A sandbox, dev, or scratch object will not exist in production, so the "
+                "build breaks or returns different data. Repoint to the production equivalent."
+            ),
+        )
+    return build_result(ctx, "S-STAT-012", Status.PASS, observed="no sandbox or dev references")
+
+
+@register_check(
+    check_id="S-STAT-013",
+    name="Reads a raw-layer object directly",
+    family=CheckFamily.STATIC,
+    default_severity=Severity.MEDIUM,
+    execution_type=ExecutionType.STATIC,
+)
+def s_stat_013(ctx: CheckContext, params: dict):
+    try:
+        tree = _tree(ctx)
+    except SqlParseError as exc:
+        return error(ctx, "S-STAT-013", f"could not parse SQL: {exc}")
+    if tree is None:
+        return build_result(ctx, "S-STAT-013", Status.SKIP, observed="no SQL provided")
+    patterns = params.get("patterns") or getattr(ctx.ruleset, "raw_layer_patterns", []) or []
+    if not patterns:
+        return build_result(
+            ctx, "S-STAT-013", Status.SKIP, observed="no raw-layer patterns configured"
+        )
+    hits = _layer_hits(ctx.sql_text or "", patterns)
+    if hits:
+        names = ", ".join(f"{fqn} ({tok})" for fqn, tok in hits)
+        return build_result(
+            ctx,
+            "S-STAT-013",
+            Status.FAIL,
+            observed=f"reads raw-layer object(s) directly: {names}",
+            expected="build on the modeled, certified layer (staging/core/mart)",
+            remediation=(
+                "Reading raw tables bypasses the tested layer: the grain, dedup, and business "
+                "rules live downstream, so results can be wrong. Point at the modeled view/table."
+            ),
+        )
+    return build_result(ctx, "S-STAT-013", Status.PASS, observed="no direct raw-layer references")
+
+
+@register_check(
+    check_id="S-STAT-014",
+    name="Outer join turned into an inner join by a WHERE filter",
+    family=CheckFamily.STATIC,
+    default_severity=Severity.HIGH,
+    execution_type=ExecutionType.STATIC,
+)
+def s_stat_014(ctx: CheckContext, params: dict):
+    try:
+        tree = _tree(ctx)
+    except SqlParseError as exc:
+        return error(ctx, "S-STAT-014", f"could not parse SQL: {exc}")
+    if tree is None:
+        return build_result(ctx, "S-STAT-014", Status.SKIP, observed="no SQL provided")
+    offenders: list[str] = []
+    for select in tree.find_all(exp.Select):
+        where = select.args.get("where")
+        if where is None:
+            continue
+        for join in select.args.get("joins", []):
+            side = (join.side or "").upper()
+            if side not in ("LEFT", "FULL"):
+                continue
+            joined = join.this
+            alias = (joined.alias_or_name or "").upper() if joined is not None else ""
+            if not alias:
+                continue
+            filtered = [c for c in where.find_all(exp.Column) if (c.table or "").upper() == alias]
+            if not filtered:
+                continue
+            # An explicit `alias.col IS NULL` means the analyst is handling the
+            # outer side deliberately (anti-join / null-tolerant); do not flag.
+            null_safe = any(
+                isinstance(node.this, exp.Column)
+                and (node.this.table or "").upper() == alias
+                and isinstance(node.expression, exp.Null)
+                for node in where.find_all(exp.Is)
+            )
+            if not null_safe:
+                label = f"{joined.alias_or_name} ({side} JOIN)"
+                if label not in offenders:
+                    offenders.append(label)
+    if offenders:
+        return build_result(
+            ctx,
+            "S-STAT-014",
+            Status.WARN,
+            observed=f"WHERE filters the outer side of: {', '.join(offenders)}",
+            expected="filter the outer table in the ON clause, or allow NULLs (OR col IS NULL)",
+            remediation=(
+                "A WHERE predicate on a LEFT/FULL-joined table drops the unmatched rows, "
+                "silently making it an inner join - a common cause of missing rows and wrong "
+                "totals. Move the condition into the JOIN ... ON, or add 'OR col IS NULL'."
+            ),
+        )
+    return build_result(
+        ctx, "S-STAT-014", Status.PASS, observed="no outer joins nullified by WHERE"
+    )
+
+
 @register_check(
     check_id="S-STAT-008",
     name="Ambiguous or implicit join type",

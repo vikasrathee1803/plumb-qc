@@ -76,6 +76,18 @@ DEFAULT_PII_COLUMN_PATTERNS: tuple[str, ...] = (
     r"(?i)\bip_?address\b",
 )
 
+# Database/schema name tokens that mark a non-production layer. A build that
+# reads these is flagged: a sandbox/dev object will not exist in production
+# (the build breaks), and a raw-layer object bypasses the modeled, tested layer
+# (wrong grain, duplicates, no business rules). Matched token-wise so DEVICE is
+# not mistaken for DEV. Teams override these to match their conventions.
+DEFAULT_SANDBOX_PATTERNS: tuple[str, ...] = (
+    "SANDBOX", "SCRATCH", "TMP", "TEMP", "WIP", "DEV", "PERSONAL", "PLAYGROUND",
+)
+DEFAULT_RAW_LAYER_PATTERNS: tuple[str, ...] = (
+    "RAW", "BRONZE", "LANDING", "STAGING", "STG", "SRC", "INGEST",
+)
+
 
 class CheckSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -96,6 +108,8 @@ class Ruleset(BaseModel):
     naming: Naming = Field(default_factory=Naming)
     deprecated_objects: list[str] = Field(default_factory=list)
     certified_sources: list[str] = Field(default_factory=list)
+    sandbox_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_SANDBOX_PATTERNS))
+    raw_layer_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_RAW_LAYER_PATTERNS))
     severity_overrides: dict[str, Severity] = Field(default_factory=dict)
     thresholds: Thresholds = Field(default_factory=Thresholds)
     pii_column_patterns: list[str] = Field(
@@ -146,6 +160,8 @@ class Profile(BaseModel):
     naming: dict[str, Any] = Field(default_factory=dict)
     deprecated_objects: list[str] = Field(default_factory=list)
     certified_sources: list[str] = Field(default_factory=list)
+    sandbox_patterns: list[str] = Field(default_factory=list)
+    raw_layer_patterns: list[str] = Field(default_factory=list)
     severity_overrides: dict[str, Severity] = Field(default_factory=dict)
     thresholds: dict[str, Any] = Field(default_factory=dict)
     pii_column_patterns: list[str] = Field(default_factory=list)

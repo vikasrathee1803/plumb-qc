@@ -110,7 +110,13 @@ def resolve_profile(base: Ruleset, profile: Profile) -> Ruleset:
     merged["defaults"].update(profile.defaults)
     merged["naming"].update(profile.naming)
 
-    for list_field in ("deprecated_objects", "certified_sources", "pii_column_patterns"):
+    for list_field in (
+        "deprecated_objects",
+        "certified_sources",
+        "pii_column_patterns",
+        "sandbox_patterns",
+        "raw_layer_patterns",
+    ):
         base_items: list[str] = merged[list_field]
         extra = [x for x in getattr(profile, list_field) if x not in base_items]
         merged[list_field] = base_items + extra

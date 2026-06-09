@@ -50,6 +50,12 @@ checks:
     enabled: true
   - id: S-STAT-011
     enabled: true
+  - id: S-STAT-012
+    enabled: true
+  - id: S-STAT-013
+    enabled: true
+  - id: S-STAT-014
+    enabled: true
   - id: S-META-001
     enabled: true
   - id: S-META-002
