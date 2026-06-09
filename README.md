@@ -3,6 +3,7 @@
 [![CI](https://github.com/vikasrathee1803/plumb-qc/actions/workflows/ci.yml/badge.svg)](https://github.com/vikasrathee1803/plumb-qc/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Download](https://img.shields.io/badge/download-Windows%20portable-2ea44f.svg)](https://github.com/vikasrathee1803/plumb-qc/releases/latest)
 
 A local-first, centrally governed QC and confidence engine. Plumb lets a
 BI analyst prove a Snowflake SQL build or a Tableau workbook is correct
@@ -47,11 +48,14 @@ Exit codes for CI: 0 passing, 1 REVIEW, 2 BLOCKED, 3 tool error.
 
 ## Run it (web UI)
 
-One click, nothing to type: double-click **`run.bat`** (Windows) or run
-**`./run.sh`** (macOS/Linux). It builds the UI on first run, then opens
-http://127.0.0.1:8000. For a machine with no Python or Node at all, use the
-portable build instead (`dist_portable/Plumb-Portable-Windows-x64.zip`: unzip,
-double-click `run.bat`, nothing to install).
+No Python or Node? Download the **portable build** from the
+[latest release](https://github.com/vikasrathee1803/plumb-qc/releases/latest):
+unzip and double-click `run.bat`. It carries its own Python and every
+dependency, runs on http://127.0.0.1:8777, and needs no install and no admin.
+
+From a source checkout: one click, nothing to type, double-click **`run.bat`**
+(Windows) or run **`./run.sh`** (macOS/Linux). It builds the UI on first run,
+then opens http://127.0.0.1:8000.
 
 Or run it by hand:
 
