@@ -44,6 +44,24 @@ def test_grain_without_key_skips_not_guesses():
     assert res.status is Status.SKIP
 
 
+def test_check_skips_when_configured_column_not_in_build():
+    """A check set tailored to another schema must skip with guidance, not fail
+    with a Snowflake 'invalid identifier' error."""
+    session = RouteSession(build_columns=["ORDER_ID", "NAME"])
+    res = d_grain_001(make_ctx(TARGET, session=session), {"key": ["customer_id"]})
+    assert res.status is Status.SKIP
+    assert "customer_id" in (res.observed or "")
+    assert "not in this build" in (res.observed or "")
+    # it never ran the doomed grain query
+    assert not any("__PLUMB_DUP_COUNT" in q for q in session.executed)
+
+
+def test_check_runs_when_column_is_in_build():
+    session = RouteSession(build_columns=["ORDER_ID"]).add("__PLUMB_DUP_COUNT", [])
+    res = d_grain_001(make_ctx(TARGET, session=session), {"key": ["order_id"]})
+    assert res.status is Status.PASS  # column present -> runs -> no dups -> PASS
+
+
 def test_recon_breach_is_blocked_with_observed_vs_expected():
     session = RouteSession()
     session.add("SUM(amount)", [{"M": 1000.0}])  # metric over the target subquery

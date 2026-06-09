@@ -42,6 +42,50 @@ def _threshold(ctx: CheckContext, name: str, default: float) -> float:
     return default
 
 
+_UNSET = object()
+
+
+def _build_columns(ctx: CheckContext) -> set[str] | None:
+    """The build's output columns (uppercased), probed once per run and cached.
+    None when they cannot be determined (e.g. a SELECT * the parser cannot
+    expand, or the probe failed); callers then let the check run as before."""
+    cached = ctx.extras.get("__build_columns", _UNSET)
+    if cached is not _UNSET:
+        return cached
+    cols: set[str] | None = None
+    try:
+        probe = _sql.wrap_target(ctx.sql_text or "", f"SELECT * FROM {_sql.TARGET_CTE} WHERE 1 = 0")
+        cols = {c.upper() for c in ctx.session.execute(probe).columns} or None
+    except Exception:  # noqa: BLE001 - a failed probe must not block the check
+        cols = None
+    ctx.extras["__build_columns"] = cols
+    return cols
+
+
+def _require_columns(ctx: CheckContext, check_id: str, columns: list[str]):
+    """A SKIP result when a configured column is not in the build, else None.
+    This turns Snowflake 'invalid identifier' errors into a clear, actionable
+    skip: the check is configured for columns this build does not produce (often
+    a check set tailored to another schema)."""
+    have = _build_columns(ctx)
+    if not have:
+        return None  # unknown output (SELECT *, probe failed): run as before
+    missing = [c for c in columns if c and c.upper() not in have]
+    if missing:
+        sample = ", ".join(sorted(have)[:10])
+        return build_result(
+            ctx,
+            check_id,
+            Status.SKIP,
+            observed=(
+                f"not run: {missing} not in this build (build has: {sample}). "
+                "Set this check's columns in Customize to match your build, "
+                "or pick a check set that fits your schema."
+            ),
+        )
+    return None
+
+
 @register_check(
     check_id="D-GRAIN-001",
     name="Grain uniqueness on declared key",
@@ -58,6 +102,9 @@ def d_grain_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-GRAIN-001", Status.SKIP, observed="no key declared in params"
         )
+    gate = _require_columns(ctx, "D-GRAIN-001", keys)
+    if gate is not None:
+        return gate
     try:
         query = _sql.grain_count_query(ctx.sql_text, keys)
         result = ctx.session.execute(query)
@@ -145,6 +192,9 @@ def d_null_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-NULL-001", Status.SKIP, observed="no key declared in params"
         )
+    gate = _require_columns(ctx, "D-NULL-001", keys)
+    if gate is not None:
+        return gate
     try:
         query = _sql.null_count_query(ctx.sql_text, keys)
         result = ctx.session.execute(query)
@@ -190,6 +240,9 @@ def d_null_002(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-NULL-002", Status.SKIP, observed="no columns declared in params"
         )
+    gate = _require_columns(ctx, "D-NULL-002", columns)
+    if gate is not None:
+        return gate
     threshold = float(params.get("threshold", _threshold(ctx, "null_rate_default", 0.0)))
     try:
         query = _sql.null_count_query(ctx.sql_text, columns)
@@ -242,6 +295,9 @@ def d_blank_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-BLANK-001", Status.SKIP, observed="no columns declared in params"
         )
+    gate = _require_columns(ctx, "D-BLANK-001", columns)
+    if gate is not None:
+        return gate
     threshold = float(params.get("threshold", 0.0))
     try:
         query = _sql.blank_count_query(ctx.sql_text, columns)
@@ -294,6 +350,9 @@ def d_pos_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-POS-001", Status.SKIP, observed="no columns declared in params"
         )
+    gate = _require_columns(ctx, "D-POS-001", columns)
+    if gate is not None:
+        return gate
     try:
         query = _sql.negative_count_query(ctx.sql_text, columns)
         result = ctx.session.execute(query)
@@ -341,6 +400,9 @@ def d_distinct_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-DISTINCT-001", Status.SKIP, observed="needs column and min and/or max"
         )
+    gate = _require_columns(ctx, "D-DISTINCT-001", [column])
+    if gate is not None:
+        return gate
     try:
         query = _sql.distinct_count_query(ctx.sql_text, column)
         result = ctx.session.execute(query)
@@ -392,6 +454,9 @@ def d_ri_001(ctx: CheckContext, params: dict):
             Status.SKIP,
             observed="needs fk_column, ref_table, ref_column in params",
         )
+    gate = _require_columns(ctx, "D-RI-001", [fk])
+    if gate is not None:
+        return gate
     try:
         query = _sql.orphan_query(ctx.sql_text, fk, ref_table, ref_column)
         result = ctx.session.execute(query)
@@ -433,6 +498,9 @@ def d_domain_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-DOMAIN-001", Status.SKIP, observed="needs column and allowed in params"
         )
+    gate = _require_columns(ctx, "D-DOMAIN-001", [column])
+    if gate is not None:
+        return gate
     try:
         query = _sql.domain_violation_query(ctx.sql_text, column, list(allowed))
         result = ctx.session.execute(query)
@@ -475,6 +543,9 @@ def d_range_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-RANGE-001", Status.SKIP, observed="needs column and min and/or max"
         )
+    gate = _require_columns(ctx, "D-RANGE-001", [column])
+    if gate is not None:
+        return gate
     try:
         query = _sql.range_violation_query(ctx.sql_text, column, low, high)
         result = ctx.session.execute(query)
@@ -515,6 +586,9 @@ def d_fresh_001(ctx: CheckContext, params: dict):
         return build_result(
             ctx, "D-FRESH-001", Status.SKIP, observed="no event_ts_col declared in params"
         )
+    gate = _require_columns(ctx, "D-FRESH-001", [ts_col])
+    if gate is not None:
+        return gate
     sla_hours = float(params.get("sla_hours", _threshold(ctx, "freshness_sla_hours_default", 24.0)))
     try:
         query = _sql.freshness_query(ctx.sql_text, ts_col)

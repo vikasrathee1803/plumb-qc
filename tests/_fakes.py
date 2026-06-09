@@ -36,6 +36,8 @@ class RouteSession:
     executed: list[str] = field(default_factory=list)
     query_tag: str = "plumb_qc:test-run"
     profile: _Profile = field(default_factory=_Profile)
+    # Columns the build-output probe (SELECT * ... WHERE 1 = 0) reports.
+    build_columns: list[str] = field(default_factory=list)
 
     def add(self, needle: str, rows: list[dict[str, Any]]) -> "RouteSession":
         self.routes.append((needle, rows))
@@ -45,10 +47,13 @@ class RouteSession:
         if self.enforce_read_only:
             assert_read_only(sql)
         self.executed.append(sql)
+        cols = list(self.build_columns) if "WHERE 1 = 0" in sql else []
         for needle, rows in self.routes:
             if needle in sql:
-                return SimpleNamespace(rows=rows, truncated=False, query_id="fake")
-        return SimpleNamespace(rows=list(self.default_rows), truncated=False, query_id="fake")
+                return SimpleNamespace(rows=rows, truncated=False, query_id="fake", columns=cols)
+        return SimpleNamespace(
+            rows=list(self.default_rows), truncated=False, query_id="fake", columns=cols
+        )
 
     def close(self) -> None:
         pass

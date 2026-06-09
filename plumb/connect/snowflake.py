@@ -257,6 +257,7 @@ class QueryResult:
     rows: list[dict[str, Any]] = field(default_factory=list)
     truncated: bool = False
     query_id: str | None = None
+    columns: list[str] = field(default_factory=list)
 
 
 def _isolate_snowflake_config() -> None:
@@ -344,7 +345,9 @@ class SnowflakeSession:
             columns = [col[0] for col in (cursor.description or [])]
             rows = [dict(zip(columns, row, strict=True)) for row in raw_rows]
             query_id = getattr(cursor, "sfqid", None)
-            return QueryResult(rows=rows, truncated=truncated, query_id=query_id)
+            return QueryResult(
+                rows=rows, truncated=truncated, query_id=query_id, columns=columns
+            )
         finally:
             cursor.close()
 
