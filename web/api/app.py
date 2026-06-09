@@ -143,8 +143,14 @@ def _record(result: RunResult) -> None:
         from plumb.engine.audit import write_audit_record
 
         write_audit_record(result)
-    except OSError:
-        pass  # an unwritable reports/audit dir must never break a run
+    except OSError as exc:
+        # Never break a run on an unwritable reports/audit dir, but a silently
+        # dropped audit record is a real risk, so make the failure visible.
+        import logging
+
+        logging.getLogger("uvicorn.error").warning(
+            "could not persist report/audit for run %s: %s", result.run_id, exc
+        )
     _HISTORY.insert(0, entry)
     del _HISTORY[_HISTORY_MEM_CAP:]
 

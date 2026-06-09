@@ -21,9 +21,17 @@ _LINT_RULES = "AM04,AM05,ST05,CV09,RF01"
 
 
 def _tree(ctx: CheckContext):
+    """The parsed AST of the build, parsed once per run and shared across every
+    static check via the run context (checks only read it). Avoids re-parsing
+    the same query a dozen times. parse_one is memoized on its own text too."""
     if not ctx.sql_text:
         return None
-    return parse_one(ctx.sql_text)
+    cached = ctx.extras.get("__ast")
+    if cached is not None:
+        return cached
+    tree = parse_one(ctx.sql_text)
+    ctx.extras["__ast"] = tree
+    return tree
 
 
 def _short(text: object, limit: int = 120) -> str:
