@@ -152,8 +152,3 @@ checks:
     params: { required: false }
   - id: T-TOTAL-001
     enabled: true
-  # Optional AI advisory (Snowflake Cortex). Off by default; advisory only - it
-  # returns WARN/PASS and never sets the verdict. Enable here and set
-  # PLUMB_CORTEX_MODEL to try it on live runs.
-  - id: A-SEM-001
-    enabled: false

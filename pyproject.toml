@@ -106,7 +106,6 @@ module = [
     "plumb.checks.sql_regression",
     "plumb.checks.sql_performance",
     "plumb.checks.tableau_static",
-    "plumb.checks.ai_review",
 ]
 disallow_untyped_defs = false
 disable_error_code = ["union-attr", "arg-type"]
