@@ -50,6 +50,7 @@ class CheckFamily(str, enum.Enum):
     PERFORMANCE = "performance"
     TABLEAU_STATIC = "tableau_static"
     TABLEAU_LIVE = "tableau_live"
+    MIGRATION_PARITY = "migration_parity"
 
 
 class ExecutionType(str, enum.Enum):
@@ -140,7 +141,7 @@ class Summary(BaseModel):
 class Target(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["sql", "tableau"]
+    type: Literal["sql", "tableau", "parity"]
     name: str
     source_ref: str | None = None
 

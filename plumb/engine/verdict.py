@@ -34,10 +34,13 @@ from plumb.engine.models import (
 )
 
 # Ranking for coverage gaps, most important unchecked risk first (ADR-0002).
+# Migration parity ranks first: a skipped parity check during a warehouse
+# migration is exactly the silent value-drift Plumb exists to prevent.
 # Assertions catch the failure modes Plumb exists for (fan-out, recon drift),
 # regression is the confidence centerpiece, metadata catches existence and
 # type errors, static is preventive, performance is advisory.
 FAMILY_RISK_ORDER: tuple[CheckFamily, ...] = (
+    CheckFamily.MIGRATION_PARITY,
     CheckFamily.ASSERTIONS,
     CheckFamily.REGRESSION,
     CheckFamily.METADATA,

@@ -45,6 +45,7 @@ _FAMILIES_FOR_TARGET: dict[str, set[CheckFamily]] = {
         CheckFamily.PERFORMANCE,
     },
     "tableau": {CheckFamily.TABLEAU_STATIC, CheckFamily.TABLEAU_LIVE},
+    "parity": {CheckFamily.MIGRATION_PARITY},
 }
 
 
@@ -59,6 +60,7 @@ class RunRequest:
     baseline_name: str | None = None
     workbook: Any | None = None
     run_id: str | None = None
+    extras: dict[str, Any] | None = None
 
 
 def run_checks(request: RunRequest) -> RunResult:
@@ -73,7 +75,7 @@ def run_checks(request: RunRequest) -> RunResult:
         ruleset=ruleset,
         baseline_store=request.baseline_store,
         workbook=request.workbook,
-        extras={"baseline_name": request.baseline_name},
+        extras={"baseline_name": request.baseline_name, **(request.extras or {})},
     )
 
     applicable = _FAMILIES_FOR_TARGET.get(request.target.type, set())
