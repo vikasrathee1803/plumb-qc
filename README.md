@@ -9,6 +9,8 @@ A local-first, centrally governed QC and confidence engine. Plumb lets a
 BI analyst prove a Snowflake SQL build or a Tableau workbook is correct
 before it ships, and produces a shareable confidence report.
 
+![Plumb catching a cross-join fan-out before it ships](docs/screenshot.png)
+
 ## What it does
 
 - Runs deterministic checks against your SQL: static analysis, schema and
