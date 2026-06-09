@@ -52,6 +52,59 @@ def test_isolate_snowflake_config_respects_existing_home(monkeypatch, tmp_path):
     assert os.environ["SNOWFLAKE_HOME"] == chosen
 
 
+def test_connection_error_hint_oauth_expired():
+    h = snow.connection_error_hint(
+        "oauth", "250001 (08001): failed to connect to DB: invalid OAuth access token"
+    )
+    assert "expired" in h.lower() and "key-pair" in h.lower()
+
+
+def test_connection_error_hint_jwt_key_rejected():
+    h = snow.connection_error_hint("snowflake_jwt", "JWT token is invalid")
+    assert "public key" in h.lower()
+
+
+def test_connection_error_hint_empty_when_unrecognized():
+    assert snow.connection_error_hint("externalbrowser", "user closed the browser") == ""
+
+
+def test_open_surfaces_oauth_hint(monkeypatch):
+    """A failed OAuth connect carries the actionable hint, not just the code."""
+    monkeypatch.setenv("PLUMB_OAUTH_TOKEN", "faketoken")
+    profile = make_profile("oauth")
+
+    def bad(**kwargs: Any) -> Any:
+        raise RuntimeError("250001 (08001): invalid OAuth access token")
+
+    session = SnowflakeSession(profile, run_id="r1", connection_factory=bad)
+    with pytest.raises(SnowflakeConnectError) as excinfo:
+        session.open()
+    assert "Hint:" in str(excinfo.value) and "oauth" in str(excinfo.value).lower()
+
+
+def test_build_connect_kwargs_pat_uses_programmatic_token(monkeypatch):
+    """A PAT is sent as authenticator=PROGRAMMATIC_ACCESS_TOKEN + token, not OAuth."""
+    monkeypatch.setenv("PLUMB_PAT_TOKEN", "my-pat-token")
+    kw = build_connect_kwargs(make_profile("pat"), run_id="r", statement_timeout_s=30)
+    assert kw["authenticator"] == "PROGRAMMATIC_ACCESS_TOKEN"
+    assert kw["token"] == "my-pat-token"
+    assert "password" not in kw
+
+
+def test_build_connect_kwargs_pat_missing_token_raises(monkeypatch):
+    monkeypatch.delenv("PLUMB_PAT_TOKEN", raising=False)
+    profile = make_profile("pat", account="no-pat-acct", user="no-pat-user")
+    with pytest.raises(AuthConfigError):
+        build_connect_kwargs(profile, run_id="r", statement_timeout_s=30)
+
+
+def test_connection_error_hint_pat_rejected():
+    h = snow.connection_error_hint(
+        "pat", "250001 (08001): failed to connect to DB: invalid token"
+    )
+    assert "pat" in h.lower() and ("expired" in h.lower() or "revoked" in h.lower())
+
+
 class FakeCursor:
     def __init__(self, rows: list[tuple], columns: list[str]) -> None:
         self._rows = rows

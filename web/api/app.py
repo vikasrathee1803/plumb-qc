@@ -45,6 +45,7 @@ from plumb.config.settings import (
     has_secret,
     oauth_entry,
     passphrase_entry,
+    pat_entry,
     tableau_app_entry,
     tableau_pat_entry,
     write_snowflake,
@@ -152,12 +153,13 @@ class LineageRequest(BaseModel):
 class SnowflakeSettings(BaseModel):
     account: str
     user: str
-    authenticator: str  # snowflake_jwt | externalbrowser | oauth
+    authenticator: str  # snowflake_jwt | externalbrowser | oauth | pat
     private_key_path: str | None = None
     role: str
     warehouse: str
     passphrase: str | None = None  # key passphrase -> keychain (None leaves as-is)
     oauth_token: str | None = None  # -> keychain
+    pat: str | None = None  # programmatic access token -> keychain
 
 
 class TableauSettings(BaseModel):
@@ -388,6 +390,12 @@ def create_app() -> FastAPI:
         if not disable_auth and path.startswith("/api/") and path not in _OPEN_PATHS:
             presented = request.headers.get("X-Plumb-Token") or request.cookies.get("plumb_token")
             if not presented or not secrets.compare_digest(presented, api_token):
+                # Drain the request body so a rejected upload gets a clean 401
+                # instead of a connection reset (the browser's "failed to fetch").
+                try:
+                    await request.body()
+                except Exception:  # noqa: BLE001 - best effort; we are rejecting anyway
+                    pass
                 return JSONResponse({"detail": "unauthorized"}, status_code=401)
         response = await call_next(request)
         # Hand the token to the browser when it loads the SPA shell.
@@ -518,6 +526,7 @@ def create_app() -> FastAPI:
             "privileged_role": is_privileged_role(p.role),
             "has_passphrase": has_secret(passphrase_entry(p.account, p.user)),
             "has_oauth_token": has_secret(oauth_entry(p.account, p.user)),
+            "has_pat": has_secret(pat_entry(p.account, p.user)),
         }
 
     @app.post("/api/settings/snowflake")
@@ -527,7 +536,9 @@ def create_app() -> FastAPI:
             "private_key_path": req.private_key_path, "role": req.role, "warehouse": req.warehouse,
         }
         try:
-            write_snowflake(data, passphrase=req.passphrase, oauth_token=req.oauth_token)
+            write_snowflake(
+                data, passphrase=req.passphrase, oauth_token=req.oauth_token, pat=req.pat
+            )
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=_first_error(exc)) from exc
         return {"ok": True}
@@ -557,6 +568,7 @@ def create_app() -> FastAPI:
             p = load_connection_profile()
             delete_secret(passphrase_entry(p.account, p.user))
             delete_secret(oauth_entry(p.account, p.user))
+            delete_secret(pat_entry(p.account, p.user))
         except ConfigError:
             pass
         if CONNECTION_FILE.exists():
@@ -601,11 +613,31 @@ def create_app() -> FastAPI:
         secret = get_secret(tableau_pat_entry(c.server, c.pat_name))
         if not secret:
             return {"ok": False, "error": "no token secret stored; save it first"}
+        # Fast reachability pre-check so a wrong/unreachable URL fails in seconds
+        # with a clear message, instead of hanging the request (which surfaces in
+        # the browser as "failed to fetch").
+        import urllib.error
+        import urllib.request
+
+        try:
+            urllib.request.urlopen(c.server, timeout=8)  # noqa: S310 - user-entered server URL
+        except urllib.error.HTTPError:
+            pass  # any HTTP status means the server responded, so it is reachable
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "error": f"could not reach {c.server}: {exc}. Check the server URL "
+                "(for example https://10ax.online.tableau.com) and your network.",
+            }
         try:
             import tableauserverclient as tsc
 
             auth = tsc.PersonalAccessTokenAuth(c.pat_name, secret, site_id=c.site)
-            server = tsc.Server(c.server, use_server_version=True)
+            # http_options timeout bounds every Tableau call so a slow server
+            # cannot hang the request.
+            server = tsc.Server(
+                c.server, use_server_version=True, http_options={"timeout": 15}
+            )
             with server.auth.sign_in(auth):
                 return {"ok": True, "site": c.site or "default"}
         except Exception as exc:  # noqa: BLE001 - any Tableau error is a failed test
@@ -676,6 +708,14 @@ def create_app() -> FastAPI:
         profile: str | None = Form(None),
         checks: str | None = Form(None),
     ) -> dict[str, Any]:
+        # Read the uploaded body FIRST. Returning a response (a 400 on the
+        # checks field, or the size error) before the body is consumed resets
+        # the connection mid-upload, which the browser reports as "failed to
+        # fetch" instead of a clean error.
+        suffix = Path(workbook.filename or "wb.twb").suffix or ".twb"
+        data = await workbook.read()
+        if len(data) > _MAX_WORKBOOK_BYTES:
+            raise HTTPException(status_code=400, detail="workbook is too large")
         ruleset = _resolve_ruleset(profile)
         if checks:
             import json
@@ -692,10 +732,6 @@ def create_app() -> FastAPI:
                     ]
                 }
             )
-        suffix = Path(workbook.filename or "wb.twb").suffix or ".twb"
-        data = await workbook.read()
-        if len(data) > _MAX_WORKBOOK_BYTES:
-            raise HTTPException(status_code=400, detail="workbook is too large")
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
             tmp_path = Path(tmp.name)

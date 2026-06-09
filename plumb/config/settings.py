@@ -56,6 +56,10 @@ def oauth_entry(account: str, user: str) -> str:
     return f"oauth_token:{account}:{user}"
 
 
+def pat_entry(account: str, user: str) -> str:
+    return f"pat:{account}:{user}"
+
+
 def tableau_pat_entry(server: str, name: str) -> str:
     return f"tableau_pat:{server}:{name}"
 
@@ -65,7 +69,11 @@ def tableau_app_entry(server: str, secret_id: str) -> str:
 
 
 def write_snowflake(
-    data: dict[str, Any], *, passphrase: str | None, oauth_token: str | None
+    data: dict[str, Any],
+    *,
+    passphrase: str | None,
+    oauth_token: str | None,
+    pat: str | None = None,
 ) -> ConnectionProfile:
     """Validate (refuses passwords), write connection.yml, and store secrets in
     the keychain under the engine's conventions. A passphrase of "" clears it;
@@ -79,6 +87,8 @@ def write_snowflake(
         set_secret(entry, passphrase) if passphrase else delete_secret(entry)
     if profile.authenticator == "oauth" and oauth_token:
         set_secret(oauth_entry(profile.account, profile.user), oauth_token)
+    if profile.authenticator == "pat" and pat:
+        set_secret(pat_entry(profile.account, profile.user), pat)
     return profile
 
 

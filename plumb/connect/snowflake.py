@@ -50,6 +50,7 @@ def is_privileged_role(role: str | None) -> bool:
     return role.strip().strip('"').upper() in ADMIN_ROLES
 ENV_PRIVATE_KEY_PASSPHRASE = "PLUMB_PRIVATE_KEY_PASSPHRASE"
 ENV_OAUTH_TOKEN = "PLUMB_OAUTH_TOKEN"
+ENV_PAT_TOKEN = "PLUMB_PAT_TOKEN"
 
 
 class ReadOnlyViolation(Exception):
@@ -202,7 +203,53 @@ def build_connect_kwargs(
             )
         kwargs["authenticator"] = "oauth"
         kwargs["token"] = token
+    elif profile.authenticator == "pat":
+        token = os.environ.get(ENV_PAT_TOKEN) or _keyring_secret(
+            f"pat:{profile.account}:{profile.user}"
+        )
+        if not token:
+            raise AuthConfigError(
+                f"no programmatic access token found; set {ENV_PAT_TOKEN} or store "
+                f"one in the OS keychain under service {KEYRING_SERVICE!r}"
+            )
+        # Snowflake programmatic access token: a token, not an OAuth token.
+        kwargs["authenticator"] = "PROGRAMMATIC_ACCESS_TOKEN"
+        kwargs["token"] = token
     return kwargs
+
+
+def connection_error_hint(authenticator: str, error_text: str) -> str:
+    """A short, actionable hint for a common Snowflake connect failure, or ''.
+    Turns the driver's terse codes into something the user can act on."""
+    e = error_text.lower()
+    if authenticator == "pat" and ("token" in e or "250001" in e or "invalid" in e):
+        return (
+            "the programmatic access token (PAT) was rejected. Confirm the PAT is current "
+            "(not expired or revoked), that it allows this role, and that any network policy "
+            "permits this machine."
+        )
+    if authenticator == "oauth" and ("oauth" in e or "token" in e or "250001" in e):
+        return (
+            "the OAuth access token is invalid or expired. If this is a Snowflake "
+            "programmatic access token (PAT), choose the PAT auth method instead of OAuth. "
+            "OAuth access tokens are also short-lived; key-pair (JWT) auth does not expire."
+        )
+    if authenticator == "snowflake_jwt" and (
+        "jwt" in e or "public key" in e or "390144" in e or "token is invalid" in e
+    ):
+        return (
+            "the key-pair was rejected. Confirm the matching public key is registered on the "
+            "Snowflake user (ALTER USER <user> SET RSA_PUBLIC_KEY='...') and that the account, "
+            "user, and role are correct."
+        )
+    if "incorrect username or password" in e or "password is empty" in e:
+        return (
+            "Plumb does not use password auth; choose key-pair (JWT), SSO (externalbrowser), "
+            "or OAuth in the connection settings."
+        )
+    if "250001" in e or "name or service" in e or "getaddrinfo" in e or "failed to connect" in e:
+        return "check the account identifier and that this machine can reach Snowflake."
+    return ""
 
 
 @dataclass
@@ -275,7 +322,11 @@ class SnowflakeSession:
         except (AuthConfigError, ReadOnlyViolation):
             raise
         except Exception as exc:
-            raise SnowflakeConnectError(f"could not connect to Snowflake: {exc}") from exc
+            detail = f"could not connect to Snowflake: {exc}"
+            hint = connection_error_hint(self.profile.authenticator, str(exc))
+            if hint:
+                detail += f" Hint: {hint}"
+            raise SnowflakeConnectError(detail) from exc
         return self
 
     def execute(self, sql: str, params: Any = None) -> QueryResult:

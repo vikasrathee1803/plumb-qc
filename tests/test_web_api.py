@@ -198,6 +198,17 @@ def test_connection_profile_model_refuses_password():
         ConnectionProfile.model_validate({**_SF_PAYLOAD, "password": "nope"})
 
 
+def test_snowflake_settings_pat_save_and_secret_never_leaks():
+    payload = {
+        "account": "acct.region.azure", "user": "ANALYST", "authenticator": "pat",
+        "role": "PLUMB_QC", "warehouse": "PLUMB_WH", "pat": "secret-pat-token",
+    }
+    assert client.post("/api/settings/snowflake", json=payload).status_code == 200
+    g = client.get("/api/settings/snowflake").json()
+    assert g["configured"] and g["authenticator"] == "pat" and g["has_pat"] is True
+    assert "secret-pat-token" not in str(g) and "pat" not in g
+
+
 def test_snowflake_settings_delete():
     client.post("/api/settings/snowflake", json=_SF_PAYLOAD)
     assert client.delete("/api/settings/snowflake").status_code == 200

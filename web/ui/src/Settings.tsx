@@ -9,6 +9,7 @@ import type { SnowflakeSettings, TableauSettings, TestResult } from "./types";
 const AUTH_OPTIONS = [
   { value: "snowflake_jwt", label: "Key-pair (JWT)" },
   { value: "externalbrowser", label: "SSO (browser)" },
+  { value: "pat", label: "Programmatic Access Token" },
   { value: "oauth", label: "OAuth token" },
 ];
 
@@ -43,7 +44,7 @@ function SnowflakeForm({ open, onSaved }: { open: boolean; onSaved: () => void }
   const [cur, setCur] = useState<SnowflakeSettings | null>(null);
   const [f, setF] = useState({
     account: "", user: "", authenticator: "snowflake_jwt", private_key_path: "",
-    role: "", warehouse: "", passphrase: "", oauth_token: "",
+    role: "", warehouse: "", passphrase: "", oauth_token: "", pat: "",
   });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -56,7 +57,7 @@ function SnowflakeForm({ open, onSaved }: { open: boolean; onSaved: () => void }
         setF((p) => ({
           ...p, account: d.account ?? "", user: d.user ?? "",
           authenticator: d.authenticator ?? "snowflake_jwt", private_key_path: d.private_key_path ?? "",
-          role: d.role ?? "", warehouse: d.warehouse ?? "", passphrase: "", oauth_token: "",
+          role: d.role ?? "", warehouse: d.warehouse ?? "", passphrase: "", oauth_token: "", pat: "",
         }));
       }
     }).catch(() => undefined);
@@ -77,6 +78,7 @@ function SnowflakeForm({ open, onSaved }: { open: boolean; onSaved: () => void }
         if (f.passphrase) body.passphrase = f.passphrase;
       }
       if (f.authenticator === "oauth" && f.oauth_token) body.oauth_token = f.oauth_token;
+      if (f.authenticator === "pat" && f.pat) body.pat = f.pat;
       await saveSnowflakeSettings(body);
       setMsg({ ok: true, text: "Saved to ~/.plumb. Secrets stored in your keychain." });
       load(); onSaved();
@@ -127,6 +129,11 @@ function SnowflakeForm({ open, onSaved }: { open: boolean; onSaved: () => void }
               <input type="password" value={f.passphrase} placeholder={cur?.has_passphrase ? "••••••••" : ""}
                 onChange={(e) => set("passphrase", e.target.value)} /></Field>
           </>
+        )}
+        {f.authenticator === "pat" && (
+          <Field label={cur?.has_pat ? "Programmatic access token (set; blank keeps it)" : "Programmatic access token"} wide>
+            <input type="password" value={f.pat} placeholder={cur?.has_pat ? "••••••••" : ""}
+              onChange={(e) => set("pat", e.target.value)} /></Field>
         )}
         {f.authenticator === "oauth" && (
           <Field label={cur?.has_oauth_token ? "OAuth token (set; blank keeps it)" : "OAuth token"} wide>

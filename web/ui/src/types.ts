@@ -130,6 +130,7 @@ export interface SnowflakeSettings {
   privileged_role?: boolean;
   has_passphrase?: boolean;
   has_oauth_token?: boolean;
+  has_pat?: boolean;
 }
 
 export interface TableauSettings {

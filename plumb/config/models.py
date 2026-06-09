@@ -178,7 +178,7 @@ class ConnectionProfile(BaseModel):
 
     account: str = Field(min_length=1)
     user: str = Field(min_length=1)
-    authenticator: Literal["snowflake_jwt", "externalbrowser", "oauth"]
+    authenticator: Literal["snowflake_jwt", "externalbrowser", "oauth", "pat"]
     private_key_path: str | None = None
     role: str = Field(min_length=1)
     warehouse: str = Field(min_length=1)
@@ -191,8 +191,9 @@ class ConnectionProfile(BaseModel):
                 if "password" in str(key).lower():
                     raise ValueError(
                         "password auth is not supported; use key-pair "
-                        "(snowflake_jwt), externalbrowser SSO, or oauth, "
-                        "with secrets in the OS keychain or environment"
+                        "(snowflake_jwt), externalbrowser SSO, oauth, or a "
+                        "programmatic access token (pat), with secrets in the "
+                        "OS keychain or environment"
                     )
         return data
 

@@ -94,8 +94,17 @@ export async function runTableau(
   form.append("workbook", file);
   if (profile) form.append("profile", profile);
   if (checks.length) form.append("checks", JSON.stringify(checks));
-  const r = await fetch("/api/check/tableau", { method: "POST", body: form });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.detail ?? "check failed");
+  let r: Response;
+  try {
+    r = await fetch("/api/check/tableau", { method: "POST", body: form });
+  } catch {
+    throw new Error(
+      "Could not reach the server. The workbook may be too large, or your session " +
+        "expired - reload the page and try again."
+    );
+  }
+  if (r.status === 401) throw new Error("Session expired. Reload the page and try again.");
+  const j = await r.json().catch(() => ({}) as { detail?: string });
+  if (!r.ok) throw new Error((j as { detail?: string }).detail ?? "check failed");
   return j as RunResult;
 }
