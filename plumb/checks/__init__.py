@@ -7,6 +7,7 @@ this import list, nothing else in the engine changes.
 """
 
 from plumb.checks import (  # noqa: F401 - imported for registration side effects
+    ai_review,
     sql_assertions,
     sql_custom,
     sql_meta,
