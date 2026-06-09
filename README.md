@@ -1,5 +1,9 @@
 # Plumb
 
+[![CI](https://github.com/vikasrathee1803/plumb-qc/actions/workflows/ci.yml/badge.svg)](https://github.com/vikasrathee1803/plumb-qc/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+
 A local-first, centrally governed QC and confidence engine. Plumb lets a
 BI analyst prove a Snowflake SQL build or a Tableau workbook is correct
 before it ships, and produces a shareable confidence report.
@@ -55,9 +59,9 @@ and report as the CLI. Run a SQL check or upload a .twb/.twbx.
 
 `plumb check sql --query f.sql --explain` attaches plain-English
 explanations to failing checks. It runs only after the verdict is decided
-and never changes a status. Groq-first (set GROQ_API_KEY; default model
-llama-3.3-70b-versatile), with xAI, Gemini, and Anthropic fallbacks. Key
-from env or OS keychain; without one, the run is unaffected.
+and never changes a status. AI assist runs in-database via Snowflake Cortex
+(no external API key, no data egress); enable it with PLUMB_CORTEX_MODEL on a
+live run. Without it, the run is unaffected.
 
 ## Shared baselines (Phase 2)
 

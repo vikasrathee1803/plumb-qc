@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Plumb: local-first BI build QC and confidence engine for Snowflake plus Tableau teams"
 readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
 dependencies = [
     # Versions are tracked against the CVE scan (.github/workflows/ci.yml and
     # requirements.lock). Upgraded 2026-06-08 to clear 18 known CVEs.
