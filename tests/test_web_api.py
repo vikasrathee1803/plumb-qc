@@ -131,6 +131,26 @@ def test_columns_endpoint_empty_for_unparseable():
     assert body["columns"] == []
 
 
+def test_tableau_upload_accepts_twbx_bundling_data():
+    """A .twbx that bundles a data extract is checked from its .twb XML; the
+    package size does not block it."""
+    import io
+    import zipfile
+
+    twb = TABLEAU_FIXTURE.read_bytes()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("wb.twb", twb)
+        z.writestr("Data/extract.hyper", b"x" * (2 * 1024 * 1024))  # 2 MB of data
+    buf.seek(0)
+    r = client.post(
+        "/api/check/tableau",
+        files={"workbook": ("wb.twbx", buf, "application/octet-stream")},
+    )
+    assert r.status_code == 200
+    assert r.json()["verdict"]
+
+
 def test_rulesets_lists_check_sets():
     r = client.get("/api/rulesets")
     assert r.status_code == 200

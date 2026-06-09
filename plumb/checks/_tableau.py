@@ -71,6 +71,20 @@ class TableauWorkbook:
         return [f for f in self.fields if f.is_calculated]
 
 
+# Plumb parses only the workbook definition (the .twb XML), never the data
+# extracts a .twbx may bundle. This bounds the XML we actually read, so a large,
+# complex workbook is fine while a runaway file is still refused.
+MAX_TWB_XML_BYTES = 64 * 1024 * 1024
+
+
+def _too_large(actual: int) -> TableauParseError:
+    return TableauParseError(
+        f"workbook definition is too large to analyze: "
+        f"{actual // (1024 * 1024)} MB (limit {MAX_TWB_XML_BYTES // (1024 * 1024)} MB). "
+        "This is the .twb XML, not the data extract."
+    )
+
+
 def read_twb_xml(path: Path) -> bytes:
     if not path.exists():
         raise TableauParseError(f"workbook not found: {path}")
@@ -80,9 +94,15 @@ def read_twb_xml(path: Path) -> bytes:
                 twb_names = [n for n in archive.namelist() if n.lower().endswith(".twb")]
                 if not twb_names:
                     raise TableauParseError(f"no .twb inside {path}")
+                info = archive.getinfo(twb_names[0])
+                if info.file_size > MAX_TWB_XML_BYTES:
+                    raise _too_large(info.file_size)
                 return archive.read(twb_names[0])
         except zipfile.BadZipFile as exc:
             raise TableauParseError(f"{path} is not a valid .twbx zip: {exc}") from exc
+    size = path.stat().st_size
+    if size > MAX_TWB_XML_BYTES:
+        raise _too_large(size)
     return path.read_bytes()
 
 

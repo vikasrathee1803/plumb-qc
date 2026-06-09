@@ -90,7 +90,10 @@ HISTORY_FILE = WEB_REPORTS_DIR / "history.jsonl"
 # (path traversal guard). SQL inputs are capped to keep the parser bounded.
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_SQL_CHARS = 100_000
-_MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
+# The whole uploaded package (a .twbx bundles data extracts); streamed to disk,
+# never held in memory. Only the .twb XML inside is parsed, and that is bounded
+# separately in the parser, so large complex workbooks are fine.
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 
 
 def _history_entry(result: RunResult) -> dict[str, Any]:
@@ -748,14 +751,33 @@ def create_app() -> FastAPI:
         profile: str | None = Form(None),
         checks: str | None = Form(None),
     ) -> dict[str, Any]:
-        # Read the uploaded body FIRST. Returning a response (a 400 on the
-        # checks field, or the size error) before the body is consumed resets
-        # the connection mid-upload, which the browser reports as "failed to
-        # fetch" instead of a clean error.
+        # Stream the upload to a temp file rather than into memory: a .twbx can
+        # be large because it bundles data extracts, but only the small .twb XML
+        # is parsed (the parser pulls just that out of the zip). We cap the whole
+        # package generously, and bound the actual .twb XML in the parser. Drain
+        # the body before any early response so a rejected upload gets a clean
+        # error, not a connection reset ("failed to fetch").
         suffix = Path(workbook.filename or "wb.twb").suffix or ".twb"
-        data = await workbook.read()
-        if len(data) > _MAX_WORKBOOK_BYTES:
-            raise HTTPException(status_code=400, detail="workbook is too large")
+        size, too_big = 0, False
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            while True:
+                chunk = await workbook.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    too_big = True
+                    break
+                tmp.write(chunk)
+        if too_big:
+            while await workbook.read(1024 * 1024):  # drain for a clean 400
+                pass
+            tmp_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"upload exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+            )
         ruleset = _resolve_ruleset(profile)
         if checks:
             import json
@@ -772,9 +794,6 @@ def create_app() -> FastAPI:
                     ]
                 }
             )
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = Path(tmp.name)
         try:
             parsed = parse_workbook(tmp_path)
         except TableauParseError as exc:

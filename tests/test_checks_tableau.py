@@ -30,6 +30,32 @@ def workbook():
     return parse_workbook(FIXTURE)
 
 
+def test_large_twbx_parses_only_the_twb_xml(tmp_path):
+    """A .twbx bundling a big data extract parses fine: only the small .twb XML
+    is read, never the data, so complex workbooks are not blocked by size."""
+    import zipfile
+
+    from plumb.checks._tableau import read_twb_xml
+
+    twb = FIXTURE.read_bytes()
+    twbx = tmp_path / "big.twbx"
+    with zipfile.ZipFile(twbx, "w") as z:
+        z.writestr("wb.twb", twb)
+        z.writestr("Data/extract.hyper", b"x" * (30 * 1024 * 1024))  # 30 MB, > the old cap
+    assert len(read_twb_xml(twbx)) == len(twb)  # only the definition is read
+    assert parse_workbook(twbx).datasources  # parses despite the large package
+
+
+def test_oversized_twb_xml_is_refused(tmp_path, monkeypatch):
+    import plumb.checks._tableau as tb
+
+    monkeypatch.setattr(tb, "MAX_TWB_XML_BYTES", 1024)
+    big = tmp_path / "big.twb"
+    big.write_bytes(b"<workbook>" + b" " * 4096 + b"</workbook>")
+    with pytest.raises(tb.TableauParseError, match="too large"):
+        tb.read_twb_xml(big)
+
+
 def _ctx(workbook, ruleset: Ruleset | None = None) -> CheckContext:
     return CheckContext(
         run_id="t",
