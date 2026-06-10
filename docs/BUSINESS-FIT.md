@@ -52,15 +52,16 @@ SYSTEM$TYPEOF probe and the post-swap inversion path.
 
 ## Roadmap (ranked, not started)
 
+0. ~~Row-hash deep compare (M-HASH-001)~~ — **shipped 2026-06-10**
+   (built first by user decision; live-verified, see PARITY-PLAN-V2
+   item 6 amendment).
 1. **Calc-level parity (M-CALC-001)** — deferred in PARITY-PLAN-V2 §2
    until the estate runner measures the uncovered-calc surface on a real
    wave; that instrumentation now exists.
-2. **Row-hash deep compare (M-HASH-001)** — keyed dimensions where
-   aggregates prove little; capped and server-side per the plan.
-3. **Power BI ingestion** — the engine, verdict, and report layers are
+2. **Power BI ingestion** — the engine, verdict, and report layers are
    artifact-agnostic; a .pbix/PBIP source extractor would double the
    addressable BI estate. Large; needs its own plan.
-4. **Scheduled re-verification** — a thin `plumb watch` over the existing
+3. **Scheduled re-verification** — a thin `plumb watch` over the existing
    snapshot/check loop would answer the observability gap without
    becoming Soda; consider only if teams ask.
 

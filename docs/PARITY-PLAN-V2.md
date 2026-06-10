@@ -78,13 +78,25 @@ now would be designing for an unmeasured problem. When built: refuse LOD,
 table calcs, and blends explicitly with machine-readable reasons, report
 coverage as "calc-level: N of M provable"; check IDs M-CALC-001 / M-CALC-ERR-001.
 
-**6. Row-hash deep compare** (d) — DEFER.
+**6. Row-hash deep compare** (d) — ~~DEFER~~ **BUILT 2026-06-10.**
 Useful for keyed dimension tables where SUM/MIN/MAX proves little. Cost:
 ORDER BY determinism, result movement (capped, but still N rows over the
 wire), key declaration required. Defer until a real workbook wave surfaces
 tables where aggregate metrics pass but row-level drift is suspected.
 When built: capped (default 1 000 rows), keyed only, hash-and-compare server-
 side to minimize data movement; check ID M-HASH-001.
+
+> **Amendment (2026-06-10, build):** built ahead of M-CALC by user
+> decision (cheaper, closes the scariest silent-failure class). As built:
+> `TO_VARCHAR(HASH(<all columns>))` per row, keyed window ordered by the
+> declared keys, `--hash-cap` (default 1000, 0 disables) on every parity
+> command; only hashes cross the wire. Hashes compare only when both
+> sides fingerprinted the same logical column set (schema drift WARNs,
+> never fakes row drift); window membership drift WARNs (M-ROW/M-DIST own
+> count signals); a non-unique declared key is a named capture error;
+> pre-hash snapshots WARN with re-snapshot advice. Codec stays v1
+> (additive record kinds). Live-verified vs PORTFOLIO_DEMO_DB: 1000-key
+> capped window PASS on V_CUSTOMER_LTV.
 
 ### REJECT
 

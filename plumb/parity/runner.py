@@ -101,6 +101,7 @@ def run_parity(
     profile_name: str | None = None,
     run_id: str | None = None,
     grain_top_n: int = 20,
+    hash_cap: int = 1000,
     post_swap: bool = False,
     snapshot_prefix: str | None = None,
 ) -> RunResult:
@@ -115,9 +116,9 @@ def run_parity(
     if session is None:
         bundle.live_unavailable_reason = NO_SESSION_REASON
     elif mode == "snapshot":
-        _measure_and_store(bundle, session, store, ruleset, grain_top_n)
+        _measure_and_store(bundle, session, store, ruleset, grain_top_n, hash_cap)
     else:
-        _measure_target(bundle, session, grain_top_n)
+        _measure_target(bundle, session, grain_top_n, hash_cap)
 
     return run_checks(
         RunRequest(
@@ -153,6 +154,7 @@ def _measure_and_store(
     store: BaselineStore,
     ruleset: Ruleset,
     grain_top_n: int,
+    hash_cap: int,
 ) -> None:
     """Snapshot phase: measure the legacy side, persist one Baseline per
     relation. A re-snapshot overwrites the previous one (the store's save
@@ -162,7 +164,9 @@ def _measure_and_store(
     for resolved in bundle.resolution.resolved:
         name = snapshot_name(bundle.snapshot_prefix, resolved.relation)
         try:
-            metrics = measure(session, resolved, "legacy", grain_top_n=grain_top_n)
+            metrics = measure(
+                session, resolved, "legacy", grain_top_n=grain_top_n, hash_cap=hash_cap
+            )
         except ParityMetricsError as exc:
             bundle.errors[name] = str(exc)
             continue
@@ -188,7 +192,9 @@ def _measure_and_store(
         bundle.live_metrics[name] = metrics
 
 
-def _measure_target(bundle: ParityBundle, session: Any, grain_top_n: int) -> None:
+def _measure_target(
+    bundle: ParityBundle, session: Any, grain_top_n: int, hash_cap: int
+) -> None:
     """Check phase: measure the target side, only for relations that have a
     snapshot to compare against (a missing snapshot is M-SNAP-001's finding;
     measuring its target side would spend queries with nothing to prove)."""
@@ -200,7 +206,7 @@ def _measure_target(bundle: ParityBundle, session: Any, grain_top_n: int) -> Non
             continue
         try:
             bundle.live_metrics[name] = measure(
-                session, resolved, "target", grain_top_n=grain_top_n
+                session, resolved, "target", grain_top_n=grain_top_n, hash_cap=hash_cap
             )
         except ParityMetricsError as exc:
             bundle.errors[name] = str(exc)

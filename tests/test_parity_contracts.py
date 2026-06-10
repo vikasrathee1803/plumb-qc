@@ -214,3 +214,52 @@ class TestFixturesLoad:
     def test_malformed_raises_parse_error(self, tmp_path):
         with pytest.raises(TableauParseError):
             parse_workbook(write_twb(tmp_path, TWB_MALFORMED))
+
+
+class TestRowHashCodec:
+    def test_round_trip_lossless(self):
+        from plumb.parity.contracts import ParityMetrics
+
+        metrics = ParityMetrics(
+            object_fqn="DB.S.T",
+            row_count=3,
+            row_hashes={
+                '{"CUSTOMER_ID": "C-101"}': "12345",
+                '{"CUSTOMER_ID": "C-205"}': "-987",
+            },
+            hashed_columns=["CUSTOMER_ID", "REGION"],
+        )
+        back = ParityMetrics.from_records(metrics.to_records())
+        assert back.row_hashes == metrics.row_hashes
+        assert back.hashed_columns == metrics.hashed_columns
+        assert back.hash_error is None
+
+    def test_hash_error_round_trips(self):
+        from plumb.parity.contracts import ParityMetrics
+
+        metrics = ParityMetrics(
+            object_fqn="DB.S.T",
+            row_count=3,
+            hashed_columns=["A"],
+            hash_error="declared key is not unique within the hash window",
+        )
+        back = ParityMetrics.from_records(metrics.to_records())
+        assert back.hash_error == metrics.hash_error
+        assert back.row_hashes == {}
+
+    def test_pre_hash_snapshots_still_decode(self):
+        """Records written by a build without row-hash support (no hash_*
+        kinds) decode to empty hash fields — codec version stays 1.0
+        because the change is purely additive."""
+        from plumb.parity.contracts import ParityMetrics
+
+        old = ParityMetrics(object_fqn="DB.S.T", row_count=5)
+        records = [
+            r
+            for r in old.to_records()
+            if r["kind"] not in ("hash_columns", "row_hash", "hash_error")
+        ]
+        back = ParityMetrics.from_records(records)
+        assert back.row_hashes == {}
+        assert back.hashed_columns == []
+        assert back.hash_error is None

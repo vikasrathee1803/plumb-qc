@@ -45,6 +45,7 @@ proving less than the map promised.
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -198,6 +199,36 @@ def grain_sql(quoted_fqn: str, grain_physical: tuple[str, ...], top_n: int) -> s
     )
 
 
+def row_hash_sql(
+    quoted_fqn: str,
+    keys: list[tuple[str, str]],
+    columns: list[tuple[str, str, str]],
+    cap: int,
+) -> str:
+    """Per-row fingerprints for the first `cap` rows by key order
+    (M-HASH-001). `keys` is (reported, physical) and `columns` is
+    (reported, physical, data_type), both sorted by reported name so the
+    two sides hash the same logical columns in the same order whatever
+    the physical renames. HASH(...) is Snowflake's deterministic 64-bit
+    hash: it handles NULLs and types natively (no TO_VARCHAR formatting
+    ambiguity, no separator/sentinel games) and only the hash ever leaves
+    the warehouse. Key columns come back under positional K_i aliases;
+    ORDER BY uses the aliases so the window is deterministic."""
+    key_items = [
+        f"{_quote_ident(physical)} AS K_{index}"
+        for index, (_, physical) in enumerate(keys)
+    ]
+    hash_args = ", ".join(_quote_ident(physical) for _, physical, _ in columns)
+    order_tail = ", ".join(f"K_{index}" for index in range(len(keys)))
+    return (
+        "SELECT " + ", ".join(key_items) + ",\n"
+        f"  TO_VARCHAR(HASH({hash_args})) AS ROW_HASH\n"
+        f"FROM {quoted_fqn}\n"
+        f"ORDER BY {order_tail}\n"
+        f"LIMIT {int(cap)}"
+    )
+
+
 def custom_sql_from_clause(text: str) -> str:
     """The wrapped FROM target every custom-SQL statement queries. The
     workbook's SQL runs verbatim inside it, byte-identical on both sides;
@@ -255,6 +286,7 @@ def measure(
     side: Literal["legacy", "target"],
     *,
     grain_top_n: int = 20,
+    hash_cap: int = 1000,
 ) -> ParityMetrics:
     """Measure one resolved relation on one side, normalized to legacy names.
 
@@ -355,12 +387,45 @@ def measure(
                 GrainGroup(group=group, count=_as_int(grain_row.get("GROUP_COUNT")))
             )
 
+    row_hashes: dict[str, str] = {}
+    hashed_columns: list[str] = []
+    hash_error: str | None = None
+    if keys and hash_cap > 0:
+        # Best-effort by design: a hash capture failure is M-HASH-001's
+        # ERROR evidence, never a reason to lose the aggregate metrics
+        # measured above.
+        hashed_columns = [reported for reported, _, _ in columns]
+        try:
+            hash_rows = _execute(
+                session, row_hash_sql(quoted_fqn, keys, columns, hash_cap), canonical_fqn
+            )
+            for hash_row in hash_rows:
+                key_obj = {
+                    reported: _stringify(hash_row.get(f"K_{index}"))
+                    for index, (reported, _) in enumerate(keys)
+                }
+                key_json = json.dumps(key_obj, sort_keys=True)
+                if key_json in row_hashes:
+                    # A non-unique declared key makes the window and the
+                    # per-key comparison meaningless — and is itself news.
+                    raise ParityMetricsError(
+                        f"declared key is not unique within the hash window "
+                        f"on {canonical_fqn}: duplicate {key_json}"
+                    )
+                row_hashes[key_json] = str(hash_row.get("ROW_HASH"))
+        except ParityMetricsError as exc:
+            row_hashes = {}
+            hash_error = str(exc)
+
     return ParityMetrics(
         object_fqn=canonical_fqn,
         row_count=_as_int(row.get("ROW_COUNT")),
         columns=column_metrics,
         distinct_counts=distinct_counts,
         grain_groups=grain_groups,
+        row_hashes=row_hashes,
+        hashed_columns=hashed_columns,
+        hash_error=hash_error,
     )
 
 

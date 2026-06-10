@@ -142,6 +142,14 @@ renames, and tolerances. Unlisted objects compare under their own names
 object to be declared. Snapshots live in the baseline store (shared store
 per ADR-0012 works for a whole team).
 
+Declaring `keys:` on an object also buys row-level fingerprints
+(M-HASH-001): the first 1 000 rows by key order are hashed server-side on
+both sides and compared per key — catching cell drift that every
+aggregate can miss (two rows swapping regions leaves counts, distincts,
+and sums untouched). Only hashes leave the warehouse. Tune the window
+with `--hash-cap N` (0 disables); snapshots taken before keys were
+declared WARN with re-snapshot advice rather than overstating proof.
+
 Different accounts for legacy and galaxy? Pass `--connection PATH` to
 either phase to use an alternate connection profile file.
 

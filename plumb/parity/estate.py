@@ -214,6 +214,7 @@ def run_estate(
     profile_name: str | None = None,
     run_id: str | None = None,
     grain_top_n: int = 20,
+    hash_cap: int = 1000,
 ) -> tuple[EstateResult, RunResult]:
     """Run one parity phase over every workbook in the manifest.
 
@@ -256,6 +257,7 @@ def run_estate(
             run_id=run_id,
             profile_name=profile_name,
             grain_top_n=grain_top_n,
+            hash_cap=hash_cap,
             post_swap=False,
         )
     if phase in ("check", "run"):
@@ -269,6 +271,7 @@ def run_estate(
             run_id=run_id,
             profile_name=profile_name,
             grain_top_n=grain_top_n,
+            hash_cap=hash_cap,
             post_swap=post_swap,
         )
 
@@ -299,6 +302,7 @@ def _sweep(
     run_id: str,
     profile_name: str | None,
     grain_top_n: int,
+    hash_cap: int,
     post_swap: bool,
 ) -> None:
     """One sequential pass over every entry with at most one session for
@@ -327,6 +331,7 @@ def _sweep(
                     profile_name=profile_name,
                     run_id=run_id,
                     grain_top_n=grain_top_n,
+                    hash_cap=hash_cap,
                     post_swap=post_swap,
                     snapshot_prefix=spec.snapshot_prefix,
                 )

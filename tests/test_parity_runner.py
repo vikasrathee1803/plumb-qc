@@ -30,6 +30,7 @@ M_IDS = [
     "M-NULL-001",
     "M-DIST-001",
     "M-GRAIN-001",
+    "M-HASH-001",
 ]
 
 
@@ -368,3 +369,87 @@ class TestBadInputs:
                 store=LocalParquetStore(tmp_path / "store"),
                 map_path=bad_map,
             )
+
+
+class TestRowHashEndToEnd:
+    """M-HASH-001 through the whole pipeline: measured at snapshot, codec
+    round-tripped through the parquet store, compared at check."""
+
+    MAP = (
+        "version: 1\n"
+        "objects:\n"
+        "  - old: LEGACY_DB.SALES.ORDERS\n"
+        "    new: LEGACY_DB.SALES.ORDERS\n"
+        "  - old: LEGACY_DB.CRM.CUSTOMERS\n"
+        "    new: LEGACY_DB.CRM.CUSTOMERS\n"
+        "    keys: [CUSTOMER_ID]\n"
+    )
+
+    def _session(self, hash_rows):
+        # ROW_HASH first: the hash query also contains the quoted FQN, so
+        # the most specific needle must win.
+        return RouteSession(
+            routes=[
+                ("ROW_HASH", list(hash_rows)),
+                ("TABLE_NAME = 'ORDERS'", [{"COLUMN_NAME": "SALES", "DATA_TYPE": "NUMBER"}]),
+                (
+                    "TABLE_NAME = 'CUSTOMERS'",
+                    [{"COLUMN_NAME": "CUSTOMER_ID", "DATA_TYPE": "TEXT"}],
+                ),
+                (
+                    '"LEGACY_DB"."SALES"."ORDERS"',
+                    [{"ROW_COUNT": 10, "NULL_0": 0, "SUM_0": 5.0, "MIN_0": 1.0, "MAX_0": 2.0}],
+                ),
+                (
+                    '"LEGACY_DB"."CRM"."CUSTOMERS"',
+                    [{"ROW_COUNT": 2, "NULL_0": 0, "DIST_0": 2}],
+                ),
+            ]
+        )
+
+    def _run(self, tmp_path: Path, snap_hashes, check_hashes) -> RunResult:
+        from tests._parity_fixtures import TWB_TWO_TABLES
+
+        wb = write_twb(tmp_path, TWB_TWO_TABLES, "sales.twb")
+        map_file = tmp_path / "map.yml"
+        map_file.write_text(self.MAP, encoding="utf-8")
+        store = LocalParquetStore(tmp_path / "store")
+        run_parity(
+            workbook=wb,
+            mode="snapshot",
+            ruleset=parity_ruleset(),
+            store=store,
+            map_path=map_file,
+            session=self._session(snap_hashes),
+        )
+        return run_parity(
+            workbook=wb,
+            mode="check",
+            ruleset=parity_ruleset(),
+            store=store,
+            map_path=map_file,
+            session=self._session(check_hashes),
+        )
+
+    HASHES = [
+        {"K_0": "C-1", "ROW_HASH": "111"},
+        {"K_0": "C-2", "ROW_HASH": "222"},
+    ]
+
+    def test_matching_hashes_pass_through_the_store(self, tmp_path: Path):
+        result = self._run(tmp_path, self.HASHES, self.HASHES)
+        assert by_id(result, "M-HASH-001") is Status.PASS
+        assert result.verdict is Verdict.READY
+
+    def test_cell_drift_caught_after_codec_round_trip(self, tmp_path: Path):
+        """Same row count, same distinct count, same aggregates - only the
+        fingerprint differs. The drift must survive parquet persistence."""
+        drifted = [
+            {"K_0": "C-1", "ROW_HASH": "111"},
+            {"K_0": "C-2", "ROW_HASH": "DRIFT"},
+        ]
+        result = self._run(tmp_path, self.HASHES, drifted)
+        check = next(c for c in result.checks if c.id == "M-HASH-001")
+        assert check.status is Status.FAIL
+        assert "C-2" in (check.observed or "")
+        assert result.verdict is Verdict.REVIEW  # HIGH fail, no blocker

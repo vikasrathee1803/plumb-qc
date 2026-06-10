@@ -114,6 +114,18 @@ class ParityMetrics:
     columns: dict[str, ColumnMetrics] = field(default_factory=dict)
     distinct_counts: dict[str, int] = field(default_factory=dict)
     grain_groups: list[GrainGroup] = field(default_factory=list)
+    # Row-hash deep compare (M-HASH-001, PARITY-PLAN-V2 item 6): per-row
+    # server-side fingerprints for keyed objects, capped at measure time.
+    # Keyed by the canonical JSON of {key column: stringified value};
+    # the value is TO_VARCHAR(HASH(<all columns>)) — only hashes ever
+    # move over the wire, never row data. hashed_columns records which
+    # reported columns the fingerprint covered: hashes from two sides are
+    # comparable ONLY when those sets match (schema drift would otherwise
+    # read as fake row drift). hash_error carries a best-effort capture
+    # failure; it never blocks the aggregate metrics.
+    row_hashes: dict[str, str] = field(default_factory=dict)
+    hashed_columns: list[str] = field(default_factory=list)
+    hash_error: str | None = None
 
     def to_records(self) -> list[dict[str, Any]]:
         """Flat records for the parquet baseline store. Schema is stable:
@@ -164,6 +176,35 @@ class ParityMetrics:
                     "text": json.dumps(grp.group, sort_keys=True),
                 }
             )
+        if self.hashed_columns:
+            records.append(
+                {
+                    "kind": "hash_columns",
+                    "column": None,
+                    "value": None,
+                    "text": json.dumps(list(self.hashed_columns)),
+                }
+            )
+        for key_json in sorted(self.row_hashes):
+            records.append(
+                {
+                    "kind": "row_hash",
+                    "column": None,
+                    "value": None,
+                    "text": json.dumps(
+                        {"key": key_json, "hash": self.row_hashes[key_json]}
+                    ),
+                }
+            )
+        if self.hash_error is not None:
+            records.append(
+                {
+                    "kind": "hash_error",
+                    "column": None,
+                    "value": None,
+                    "text": self.hash_error,
+                }
+            )
         return records
 
     @classmethod
@@ -208,6 +249,13 @@ class ParityMetrics:
             elif kind == "grain":
                 group = json.loads(str(text or "{}"))
                 metrics.grain_groups.append(GrainGroup(group=group, count=int(value or 0)))
+            elif kind == "hash_columns":
+                metrics.hashed_columns = [str(c) for c in json.loads(str(text or "[]"))]
+            elif kind == "row_hash":
+                entry = json.loads(str(text or "{}"))
+                metrics.row_hashes[str(entry.get("key"))] = str(entry.get("hash"))
+            elif kind == "hash_error":
+                metrics.hash_error = str(text or "")
         return metrics
 
 

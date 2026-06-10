@@ -936,6 +936,165 @@ def m_grain_001(
     )
 
 
+@register_check(
+    check_id="M-HASH-001",
+    name="Row-level hash parity on keyed objects",
+    family=CheckFamily.MIGRATION_PARITY,
+    default_severity=Severity.HIGH,
+    execution_type=ExecutionType.EXECUTION,
+)
+def m_hash_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
+    """Cell-level drift that every aggregate can miss: two rows swapping
+    their regions leaves row counts, distinct counts, grain groups, and
+    SUM/MIN/MAX untouched. Compares the per-key server-side fingerprints
+    captured at measure time (capped window, key order). Hashes are only
+    comparable when both sides fingerprinted the same logical column set;
+    anything else is a WARN, never fake drift. Keys present in only one
+    side's window are membership/window drift — named, but owned by
+    M-ROW-001/M-DIST-001 — so they WARN rather than FAIL here."""
+    bundle = _bundle(ctx)
+    if bundle is None:
+        return _no_bundle_outcome(ctx, "M-HASH-001")
+    gate = _value_phase_skip(ctx, "M-HASH-001", bundle)
+    if gate is not None:
+        return gate
+    resolution = bundle.resolution
+    assert resolution is not None
+    if not any(r.keys for r in resolution.resolved):
+        return build_result(
+            ctx, "M-HASH-001", Status.SKIP, observed="no keys declared in map"
+        )
+    pairs, errored = _comparable(bundle, resolution)
+    errored = [(r, msg) for r, msg in errored if r.keys]
+    if errored:
+        return _measurement_error(ctx, "M-HASH-001", errored)
+    keyed = [p for p in pairs if p.resolved.keys]
+    hash_errors = [
+        (p.resolved, str(p.snap.hash_error or p.live.hash_error))
+        for p in keyed
+        if p.snap.hash_error or p.live.hash_error
+    ]
+    if hash_errors:
+        return _measurement_error(ctx, "M-HASH-001", hash_errors)
+
+    evidence: list[dict[str, Any]] = []
+    mismatched: list[str] = []
+    unmeasured: list[str] = []
+    incomparable: list[str] = []
+    disjoint: list[str] = []
+    compared = 0
+    objects = 0
+    any_capped = False
+    for pair in keyed:
+        name = _object_name(pair.resolved)
+        if (pair.snap.row_count > 0 and not pair.snap.row_hashes) or (
+            pair.live.row_count > 0 and not pair.live.row_hashes
+        ):
+            # Rows exist but no window was captured — typically a snapshot
+            # taken before keys were declared or by a pre-hash build:
+            # silently passing would overstate proof. (An EMPTY table with
+            # no hashes is fully measured: there is nothing to fingerprint.)
+            unmeasured.append(name)
+            continue
+        if pair.snap.hashed_columns != pair.live.hashed_columns:
+            incomparable.append(name)
+            continue
+        objects += 1
+        if pair.snap.row_count > len(pair.snap.row_hashes) or pair.live.row_count > len(
+            pair.live.row_hashes
+        ):
+            any_capped = True
+        snap_keys = set(pair.snap.row_hashes)
+        live_keys = set(pair.live.row_hashes)
+        for key in sorted(snap_keys & live_keys):
+            compared += 1
+            old_hash = pair.snap.row_hashes[key]
+            new_hash = pair.live.row_hashes[key]
+            if old_hash != new_hash:
+                mismatched.append(f"{key} on {name}")
+                evidence.append(
+                    {
+                        "object": name,
+                        "key": key,
+                        "legacy_hash": old_hash,
+                        "target_hash": new_hash,
+                    }
+                )
+        only_counts = len(snap_keys - live_keys), len(live_keys - snap_keys)
+        if any(only_counts):
+            disjoint.append(
+                f"{name} ({only_counts[0]} key(s) only in snapshot window, "
+                f"{only_counts[1]} only in target window)"
+            )
+    caveat = " (capped window: first rows by key order)" if any_capped else ""
+    if mismatched:
+        return build_result(
+            ctx,
+            "M-HASH-001",
+            Status.FAIL,
+            observed=(
+                f"{len(mismatched)} row(s) drifted on shared keys{caveat}: "
+                f"{_named(mismatched)}"
+            ),
+            expected="identical row fingerprints for every shared key",
+            evidence_rows=evidence[:_DETAIL_CAP],
+            remediation="A row's contents changed between legacy and target while "
+            "the aggregates stayed in tolerance (the silent-drift class this check "
+            "exists for); inspect the named keys cell by cell.",
+        )
+    if unmeasured:
+        return build_result(
+            ctx,
+            "M-HASH-001",
+            Status.WARN,
+            observed=(
+                f"row hashes not captured on both sides for {len(unmeasured)} "
+                f"object(s): {_named(unmeasured)}"
+            ),
+            expected="a hash window captured in both the snapshot and the live side",
+            remediation="The snapshot predates the key declaration or this build's "
+            "row-hash support; re-run plumb parity snapshot, then check again.",
+        )
+    if incomparable:
+        return build_result(
+            ctx,
+            "M-HASH-001",
+            Status.WARN,
+            observed=(
+                f"hashed column sets differ between snapshot and target for "
+                f"{len(incomparable)} object(s): {_named(incomparable)}"
+            ),
+            expected="both sides fingerprint the same logical columns",
+            remediation="The schema changed since the snapshot (see M-SCHEMA-001); "
+            "row hashes cover different columns and cannot be compared. "
+            "Re-snapshot once the schema is settled.",
+        )
+    if disjoint:
+        return build_result(
+            ctx,
+            "M-HASH-001",
+            Status.WARN,
+            observed=(
+                f"hash windows do not fully overlap{caveat}: {_named(disjoint)}"
+            ),
+            expected="the same keys in both sides' hash windows",
+            remediation="Rows entered or left the capped window (membership drift "
+            "is M-ROW-001/M-DIST-001's signal); raise --hash-cap to widen the "
+            "window if the table outgrows it.",
+        )
+    return build_result(
+        ctx,
+        "M-HASH-001",
+        Status.PASS,
+        observed=(
+            f"row hashes match for {compared} shared key(s) across "
+            f"{objects} object(s){caveat}"
+        ),
+    )
+
+
 # --- estate roll-up (PARITY-PLAN-V2 E7, S7.2) -----------------------------
 #
 # Two checks express the D17 roll-up through the engine's verdict rules, so

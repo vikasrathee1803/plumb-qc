@@ -342,10 +342,22 @@ def parity_snapshot(
     grain_top_n: int = typer.Option(
         20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
     ),
+    hash_cap: int = typer.Option(
+        1000, "--hash-cap", help="Rows fingerprinted per keyed object (M-HASH-001); 0 disables."
+    ),
 ) -> None:
     """Measure the legacy side and save one snapshot per workbook source."""
     _run_parity_phase(
-        "snapshot", workbook, map_file, profile, rules, connection, out, static_only, grain_top_n
+        "snapshot",
+        workbook,
+        map_file,
+        profile,
+        rules,
+        connection,
+        out,
+        static_only,
+        grain_top_n,
+        hash_cap=hash_cap,
     )
 
 
@@ -369,6 +381,9 @@ def parity_check(
     grain_top_n: int = typer.Option(
         20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
     ),
+    hash_cap: int = typer.Option(
+        1000, "--hash-cap", help="Rows fingerprinted per keyed object (M-HASH-001); 0 disables."
+    ),
     post_swap: bool = typer.Option(
         False,
         "--post-swap",
@@ -387,6 +402,7 @@ def parity_check(
         out,
         static_only,
         grain_top_n,
+        hash_cap=hash_cap,
         post_swap=post_swap,
     )
 
@@ -401,6 +417,7 @@ def _run_parity_phase(
     out: Path | None,
     static_only: bool,
     grain_top_n: int,
+    hash_cap: int = 1000,
     post_swap: bool = False,
 ) -> None:
     from plumb.checks._tableau import TableauParseError as _ParseError
@@ -430,6 +447,7 @@ def _run_parity_phase(
             profile_name=profile,
             run_id=run_id,
             grain_top_n=grain_top_n,
+            hash_cap=hash_cap,
             post_swap=post_swap,
         )
     except (_ParseError, ConfigError, ValueError) as exc:
@@ -471,6 +489,9 @@ def parity_run(
     ),
     grain_top_n: int = typer.Option(
         20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
+    ),
+    hash_cap: int = typer.Option(
+        1000, "--hash-cap", help="Rows fingerprinted per keyed object (M-HASH-001); 0 disables."
     ),
 ) -> None:
     """Both-live convenience (PARITY-PLAN-V2 D16): snapshot the legacy side,
@@ -521,6 +542,7 @@ def parity_run(
                 profile_name=profile,
                 run_id=run_id,
                 grain_top_n=grain_top_n,
+                hash_cap=hash_cap,
             )
         except (_ParseError, ConfigError, ValueError) as exc:
             raise _fail(str(exc)) from exc
@@ -583,6 +605,9 @@ def parity_estate(
     ),
     grain_top_n: int = typer.Option(
         20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
+    ),
+    hash_cap: int = typer.Option(
+        1000, "--hash-cap", help="Rows fingerprinted per keyed object (M-HASH-001); 0 disables."
     ),
     post_swap: bool = typer.Option(
         False,
@@ -657,6 +682,7 @@ def parity_estate(
             profile_name=profile,
             run_id=run_id,
             grain_top_n=grain_top_n,
+            hash_cap=hash_cap,
         )
     except (ConfigError, ValueError) as exc:
         raise _fail(str(exc)) from exc

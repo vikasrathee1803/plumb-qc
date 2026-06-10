@@ -13,6 +13,7 @@ from plumb.checks.parity import (
     m_agg_001,
     m_dist_001,
     m_grain_001,
+    m_hash_001,
     m_map_001,
     m_null_001,
     m_row_001,
@@ -46,11 +47,14 @@ ALL_CHECK_FNS = [
     m_null_001,
     m_dist_001,
     m_grain_001,
+    m_hash_001,
 ]
-VALUE_CHECK_FNS = [m_schema_001, m_row_001, m_agg_001, m_null_001, m_dist_001, m_grain_001]
+VALUE_CHECK_FNS = [
+    m_schema_001, m_row_001, m_agg_001, m_null_001, m_dist_001, m_grain_001, m_hash_001,
+]
 ALL_CHECK_IDS = [
     "M-SRC-001", "M-MAP-001", "M-SNAP-001", "M-SCHEMA-001", "M-ROW-001",
-    "M-AGG-001", "M-NULL-001", "M-DIST-001", "M-GRAIN-001",
+    "M-AGG-001", "M-NULL-001", "M-DIST-001", "M-GRAIN-001", "M-HASH-001",
 ]
 
 PREFIX = "parity__wb"
@@ -1090,6 +1094,7 @@ class TestRegisteredCallables:
             "M-NULL-001": checks.m_null_001,
             "M-DIST-001": checks.m_dist_001,
             "M-GRAIN-001": checks.m_grain_001,
+            "M-HASH-001": checks.m_hash_001,
             "M-ESTATE-001": checks.m_estate_001,
             "M-ESTATE-002": checks.m_estate_002,
         }
@@ -1112,3 +1117,140 @@ class TestMSnap001PostSwapRemediation:
         assert "plumb parity snapshot" not in res.remediation
         assert "old:" in res.remediation
         assert "Do NOT re-snapshot" in res.remediation
+
+
+# --- M-HASH-001: row-hash deep compare (PARITY-PLAN-V2 item 6) -------------
+
+
+def hashed(fqn, rows, hashes, cols=("AMOUNT", "REGION"), error=None):
+    """A ParityMetrics carrying a row-hash window."""
+    m = metrics(fqn, rows=rows)
+    m.row_hashes = dict(hashes)
+    m.hashed_columns = list(cols)
+    m.hash_error = error
+    return m
+
+
+KEY_KW = {"keys": ("CUSTOMER_ID",)}
+K1 = '{"CUSTOMER_ID": "C-101"}'
+K2 = '{"CUSTOMER_ID": "C-205"}'
+
+
+class TestMHash001:
+    def test_skip_when_no_keys_declared(self):
+        bundle = two_object_bundle(
+            snap_orders=metrics(ORDERS_TARGET), live_orders=metrics(ORDERS_TARGET)
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.SKIP
+        assert "no keys" in res.observed
+
+    def test_identical_windows_pass(self):
+        bundle = two_object_bundle(
+            snap_orders=hashed(ORDERS_TARGET, 2, {K1: "111", K2: "222"}),
+            live_orders=hashed(ORDERS_TARGET, 2, {K1: "111", K2: "222"}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.PASS
+        assert "2 shared key(s)" in res.observed
+        assert "capped" not in res.observed
+
+    def test_cell_drift_on_shared_key_fails_naming_the_key(self):
+        """The check's reason to exist: same row count, same distincts,
+        but one row's contents changed - the hash is the only witness."""
+        bundle = two_object_bundle(
+            snap_orders=hashed(ORDERS_TARGET, 2, {K1: "111", K2: "222"}),
+            live_orders=hashed(ORDERS_TARGET, 2, {K1: "111", K2: "999"}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "C-205" in res.observed
+        assert ORDERS_TARGET in res.observed
+        (row,) = res.evidence.sample_rows
+        assert row["legacy_hash"] == "222" and row["target_hash"] == "999"
+
+    def test_capped_window_is_named_in_observed(self):
+        bundle = two_object_bundle(
+            snap_orders=hashed(ORDERS_TARGET, 5000, {K1: "111"}),
+            live_orders=hashed(ORDERS_TARGET, 5000, {K1: "111"}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.PASS
+        assert "capped window" in res.observed
+
+    def test_pre_hash_snapshot_warns_with_resnapshot_advice(self):
+        snap = metrics(ORDERS_TARGET, rows=2)  # no hashes, rows exist
+        bundle = two_object_bundle(
+            snap_orders=snap,
+            live_orders=hashed(ORDERS_TARGET, 2, {K1: "111", K2: "222"}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.WARN
+        assert "not captured" in res.observed
+        assert "snapshot" in res.remediation
+
+    def test_empty_table_with_no_hashes_is_fully_measured(self):
+        """Zero rows means zero fingerprints - that is measurement, not a
+        gap; the check must not WARN a legitimately empty object."""
+        bundle = two_object_bundle(
+            snap_orders=hashed(ORDERS_TARGET, 0, {}),
+            live_orders=hashed(ORDERS_TARGET, 0, {}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.PASS
+        assert "0 shared key(s)" in res.observed
+
+    def test_different_hashed_column_sets_warn_never_fake_drift(self):
+        """A schema change between snapshot and check makes every hash
+        differ for a non-data reason; comparing them would manufacture
+        drift. M-SCHEMA-001 owns the schema signal."""
+        bundle = two_object_bundle(
+            snap_orders=hashed(ORDERS_TARGET, 1, {K1: "111"}, cols=("AMOUNT",)),
+            live_orders=hashed(ORDERS_TARGET, 1, {K1: "999"}, cols=("AMOUNT", "NEW_COL")),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.WARN
+        assert "column sets differ" in res.observed
+
+    def test_window_membership_drift_warns_not_fails(self):
+        """Keys present in only one window: deletion, insertion, or just
+        window shift past the cap - M-ROW/M-DIST own count drift, so this
+        names the drift without failing."""
+        bundle = two_object_bundle(
+            snap_orders=hashed(ORDERS_TARGET, 2, {K1: "111", K2: "222"}),
+            live_orders=hashed(ORDERS_TARGET, 2, {K1: "111"}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.WARN
+        assert "only in snapshot window" in res.observed
+        assert "--hash-cap" in res.remediation
+
+    def test_hash_error_is_error_never_pass(self):
+        bundle = two_object_bundle(
+            snap_orders=hashed(
+                ORDERS_TARGET, 2, {}, error="declared key is not unique"
+            ),
+            live_orders=hashed(ORDERS_TARGET, 2, {K1: "111"}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.ERROR
+        assert "not unique" in res.observed
+
+    def test_drift_beats_membership_warn(self):
+        """FAIL outranks WARN when both signals exist in one run."""
+        bundle = two_object_bundle(
+            snap_orders=hashed(ORDERS_TARGET, 3, {K1: "111", K2: "222"}),
+            live_orders=hashed(ORDERS_TARGET, 3, {K1: "DRIFT"}),
+            orders_kw=dict(KEY_KW),
+        )
+        res = m_hash_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "C-101" in res.observed

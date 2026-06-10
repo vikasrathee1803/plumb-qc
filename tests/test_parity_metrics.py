@@ -139,13 +139,15 @@ class TestTableMetricsLegacy:
         assert [g.count for g in metrics.grain_groups] == [60, 40]
         assert metrics.grain_groups[0].group == {"ORDER_DATE": "2026-01-01", "REGION": "EMEA"}
 
-    def test_exactly_three_queries(self) -> None:
+    def test_exactly_four_queries(self) -> None:
+        # discovery, aggregate, grain, and (keys declared) the hash window.
         session = table_session()
         measure(session, resolved_table(), "legacy")
-        assert len(session.executed) == 3
+        assert len(session.executed) == 4
         assert "INFORMATION_SCHEMA.COLUMNS" in session.executed[0]
         assert "COUNT(*) AS ROW_COUNT" in session.executed[1]
         assert "GROUP BY" in session.executed[2]
+        assert "ROW_HASH" in session.executed[3]
 
     def test_legacy_sql_uses_legacy_fqn_and_quoted_identifiers(self) -> None:
         session = table_session()
@@ -159,7 +161,9 @@ class TestTableMetricsLegacy:
         session = table_session()
         metrics = measure(session, resolved_table(grain=()), "legacy")
         assert metrics.grain_groups == []
-        assert len(session.executed) == 2
+        # discovery + aggregate + hash window (keys still declared).
+        assert len(session.executed) == 3
+        assert not any("GROUP BY" in sql for sql in session.executed)
 
     def test_null_grain_value_reported_as_empty_set_symbol(self) -> None:
         session = table_session()
@@ -306,7 +310,8 @@ class TestReadOnlyAndSafety:
             "legacy",
         )
         statements = [sql for session in sessions for sql in session.executed]
-        assert len(statements) == 7
+        # 4 per keyed table side (discovery/aggregate/grain/hash) + 1 custom.
+        assert len(statements) == 9
         for sql in statements:
             assert_read_only(sql)  # raises ReadOnlyViolation on any non-read
 
@@ -603,3 +608,95 @@ class TestGrainValueStringification:
 
     def test_null_keeps_sentinel(self) -> None:
         assert self._grain_groups_for(None)["ORDER_DATE"] == NULL_GROUP_VALUE
+
+
+class TestRowHashCapture:
+    """M-HASH-001 measurement half: the capped, keyed, server-side window."""
+
+    HASH_ROWS = [
+        {"K_0": 1, "ROW_HASH": "111"},
+        {"K_0": 2, "ROW_HASH": "222"},
+    ]
+
+    def hash_session(self, region_name: str = "REGION", hash_rows=None):
+        return (
+            RouteSession()
+            .add("INFORMATION_SCHEMA.COLUMNS", discovery_rows(region_name))
+            .add("ROW_HASH", self.HASH_ROWS if hash_rows is None else hash_rows)
+            .add("GROUP BY", GRAIN_ROWS)
+            .add("COUNT(*) AS ROW_COUNT", [AGGREGATE_ROW])
+        )
+
+    def test_hash_sql_shape(self) -> None:
+        session = self.hash_session()
+        measure(session, resolved_table(), "legacy", hash_cap=50)
+        sql = next(s for s in session.executed if "ROW_HASH" in s)
+        assert '"ORDER_ID" AS K_0' in sql
+        assert "TO_VARCHAR(HASH(" in sql
+        # All four discovered columns, in reported-name order.
+        assert '"AMOUNT", "ORDER_DATE", "ORDER_ID", "REGION"' in sql
+        assert "ORDER BY K_0" in sql
+        assert sql.endswith("LIMIT 50")
+        assert_read_only(sql)
+
+    def test_hashes_keyed_by_stringified_key_values(self) -> None:
+        metrics = measure(self.hash_session(), resolved_table(), "legacy")
+        assert metrics.row_hashes == {
+            '{"ORDER_ID": "1"}': "111",
+            '{"ORDER_ID": "2"}': "222",
+        }
+        assert metrics.hashed_columns == ["AMOUNT", "ORDER_DATE", "ORDER_ID", "REGION"]
+        assert metrics.hash_error is None
+
+    def test_target_side_hashes_physical_columns_reports_legacy_names(self) -> None:
+        """The rename map applies in the SQL (physical names) while the
+        stored key/columns stay legacy-named, same as every other metric."""
+        session = self.hash_session(region_name="SALES_REGION")
+        metrics = measure(session, resolved_table(), "target")
+        sql = next(s for s in session.executed if "ROW_HASH" in s)
+        assert '"SALES_REGION"' in sql and '"REGION"' not in sql.replace(
+            '"SALES_REGION"', ""
+        )
+        assert metrics.hashed_columns == ["AMOUNT", "ORDER_DATE", "ORDER_ID", "REGION"]
+
+    def test_duplicate_key_in_window_sets_hash_error_keeps_aggregates(self) -> None:
+        """A non-unique declared key is news, not a crash: the aggregate
+        metrics stand and the duplicate is named for M-HASH-001 to ERROR."""
+        dup_rows = [
+            {"K_0": 1, "ROW_HASH": "111"},
+            {"K_0": 1, "ROW_HASH": "999"},
+        ]
+        metrics = measure(
+            self.hash_session(hash_rows=dup_rows), resolved_table(), "legacy"
+        )
+        assert metrics.row_hashes == {}
+        assert metrics.hash_error is not None
+        assert "not unique" in metrics.hash_error
+        assert metrics.row_count == 100  # aggregates intact
+
+    def test_no_keys_means_no_hash_query(self) -> None:
+        session = self.hash_session()
+        metrics = measure(session, resolved_table(keys=()), "legacy")
+        assert not any("ROW_HASH" in s for s in session.executed)
+        assert metrics.row_hashes == {}
+        assert metrics.hashed_columns == []
+
+    def test_hash_cap_zero_disables(self) -> None:
+        session = self.hash_session()
+        metrics = measure(session, resolved_table(), "legacy", hash_cap=0)
+        assert not any("ROW_HASH" in s for s in session.executed)
+        assert metrics.row_hashes == {}
+
+    def test_hash_query_failure_degrades_to_hash_error(self) -> None:
+        session = NeedleFailSession(
+            fail_needle="ROW_HASH",
+            routes=[
+                ("INFORMATION_SCHEMA.COLUMNS", discovery_rows()),
+                ("GROUP BY", GRAIN_ROWS),
+                ("COUNT(*) AS ROW_COUNT", [AGGREGATE_ROW]),
+            ],
+        )
+        metrics = measure(session, resolved_table(), "legacy")
+        assert metrics.row_count == 100
+        assert metrics.row_hashes == {}
+        assert metrics.hash_error is not None
