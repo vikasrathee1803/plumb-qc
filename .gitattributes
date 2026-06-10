@@ -1,0 +1,14 @@
+# Normalize line endings so Windows checkouts stop warning on every add.
+# Source is stored with LF in the repo; editors/IDEs get their native EOL.
+* text=auto
+*.py text
+*.ts text
+*.tsx text
+*.md text
+*.yml text
+*.yaml text
+*.sql text
+*.twb text
+*.png binary
+*.parquet binary
+*.twbx binary

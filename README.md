@@ -93,7 +93,9 @@ plumb web                                       # serves API + SPA on :8000
 ```
 
 The web UI wraps the same engine and renders the same verdict, coverage, and
-report as the CLI. Run a SQL check, upload a .twb/.twbx, open the query map, or
+report as the CLI. Run a SQL check, upload a .twb/.twbx, prove a migration
+from the Migration tab (snapshot → check, optional map and post-swap mode —
+single workbooks; waves stay on `plumb parity estate`), open the query map, or
 configure your Snowflake/Tableau connection from the gear icon (credentials stay
 local: config in ~/.plumb, secrets in your OS keychain).
 

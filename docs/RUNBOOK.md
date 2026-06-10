@@ -153,6 +153,11 @@ declared WARN with re-snapshot advice rather than overstating proof.
 Different accounts for legacy and galaxy? Pass `--connection PATH` to
 either phase to use an alternate connection profile file.
 
+Prefer a browser? `plumb web` → Migration tab runs the same
+snapshot/check pipeline on a single uploaded workbook (map upload and
+post-swap supported); snapshots are shared with the CLI as long as the
+workbook keeps the same file name.
+
 ## Wave migration play (estate runner)
 
 A migration wave is N workbooks, one command per phase, one roll-up

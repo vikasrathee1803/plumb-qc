@@ -1,6 +1,6 @@
 # ADR-0014: AI assist runs in-database via Snowflake Cortex
 
-Date: 2026-06-08. Status: accepted. Supersedes ADR-0013.
+Date: 2026-06-08. Status: accepted. Supersedes ADR-0008 (renumbered from a duplicate ADR-0013).
 
 The assist layer was a Groq-first, multi-provider client over external LLM
 SDKs (openai, google-generativeai, with a lazy anthropic path). We do not

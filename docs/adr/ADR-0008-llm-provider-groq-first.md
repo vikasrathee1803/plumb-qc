@@ -1,4 +1,4 @@
-# ADR-0013: AI assist is Groq-first, multi-provider
+# ADR-0008: AI assist is Groq-first, multi-provider
 
 Date: 2026-06-08. Status: SUPERSEDED by ADR-0014 (assist moved in-database
 to Snowflake Cortex; the external LLM SDKs were removed).
