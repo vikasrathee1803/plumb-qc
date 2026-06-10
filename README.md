@@ -83,6 +83,27 @@ and never changes a status. AI assist runs in-database via Snowflake Cortex
 (no external API key, no data egress); enable it with PLUMB_CORTEX_MODEL on a
 live run. Without it, the run is unaffected.
 
+## Migration parity (galaxy / UDM cut-over)
+
+Migrating workbooks to a new warehouse or presentation layer? Prove the
+numbers match before anyone eyeballs dashboards side by side:
+
+```
+plumb parity snapshot --workbook sales.twbx --map galaxy-map.yml   # legacy side
+# ... re-point the workbook (Tableau Autopilot swap-connection) ...
+plumb parity check    --workbook sales.twbx --map galaxy-map.yml   # migrated side
+```
+
+`snapshot` derives the Snowflake objects the workbook depends on, measures
+them read-only (row counts, per-column aggregates, null/distinct counts,
+optional grain groups), and saves one baseline per object. `check` measures
+the mapped target objects and compares: drift is a BLOCKED verdict with the
+worst offenders named. Joins/unions/extract-only sources are refused and
+reported in coverage, never guessed at. The map file declares old→new
+renames, keys, grain, and tolerances; unlisted objects compare under their
+own names. See docs/RUNBOOK.md for the full migration play and
+docs/adr/ADR-0013-migration-parity-family.md for the design.
+
 ## Shared baselines (Phase 2)
 
 Point all analysts at one baseline location (a network share or mounted

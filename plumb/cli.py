@@ -106,9 +106,15 @@ app = typer.Typer(
 rules_app = typer.Typer(help="Manage the central, versioned ruleset.")
 baseline_app = typer.Typer(help="Manage golden baselines for regression diff.")
 report_app = typer.Typer(help="Work with generated reports.")
+parity_app = typer.Typer(
+    help="Migration parity: prove a workbook shows the same numbers on the "
+    "migrated warehouse. Snapshot the legacy side, then check the target "
+    "side against it (docs/PARITY-PLAN.md)."
+)
 app.add_typer(rules_app, name="rules")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(report_app, name="report")
+app.add_typer(parity_app, name="parity")
 
 
 def _fail(message: str) -> "typer.Exit":
@@ -314,6 +320,111 @@ def check(
     raise typer.Exit(exit_code_for_verdict(result.verdict, ruleset.defaults.fail_on))
 
 
+# --- parity -------------------------------------------------------------
+
+@parity_app.command("snapshot")
+def parity_snapshot(
+    workbook: Path = typer.Option(
+        ..., "--workbook", help="The .twb/.twbx whose legacy sources to snapshot."
+    ),
+    map_file: Path = typer.Option(
+        None, "--map", help="old->new object map (galaxy-map.yml); identity when omitted."
+    ),
+    profile: str = typer.Option(None, "--profile", help="Ruleset profile overlay."),
+    rules: Path = typer.Option(None, "--rules", help="Path to a ruleset file."),
+    connection: Path = typer.Option(
+        None, "--connection", help="Alternate connection profile file (legacy side)."
+    ),
+    out: Path = typer.Option(None, "--out", help="Report output directory."),
+    static_only: bool = typer.Option(
+        False, "--static-only", help="Extraction and mapping checks only; no Snowflake."
+    ),
+    grain_top_n: int = typer.Option(
+        20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
+    ),
+) -> None:
+    """Measure the legacy side and save one snapshot per workbook source."""
+    _run_parity_phase(
+        "snapshot", workbook, map_file, profile, rules, connection, out, static_only, grain_top_n
+    )
+
+
+@parity_app.command("check")
+def parity_check(
+    workbook: Path = typer.Option(
+        ..., "--workbook", help="The .twb/.twbx to verify against its snapshots."
+    ),
+    map_file: Path = typer.Option(
+        None, "--map", help="old->new object map (galaxy-map.yml); identity when omitted."
+    ),
+    profile: str = typer.Option(None, "--profile", help="Ruleset profile overlay."),
+    rules: Path = typer.Option(None, "--rules", help="Path to a ruleset file."),
+    connection: Path = typer.Option(
+        None, "--connection", help="Alternate connection profile file (target side)."
+    ),
+    out: Path = typer.Option(None, "--out", help="Report output directory."),
+    static_only: bool = typer.Option(
+        False, "--static-only", help="Extraction and mapping checks only; no Snowflake."
+    ),
+    grain_top_n: int = typer.Option(
+        20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
+    ),
+) -> None:
+    """Measure the migrated side and compare it against the legacy snapshots."""
+    _run_parity_phase(
+        "check", workbook, map_file, profile, rules, connection, out, static_only, grain_top_n
+    )
+
+
+def _run_parity_phase(
+    mode: str,
+    workbook: Path,
+    map_file: Path | None,
+    profile: str | None,
+    rules: Path | None,
+    connection: Path | None,
+    out: Path | None,
+    static_only: bool,
+    grain_top_n: int,
+) -> None:
+    from plumb.checks._tableau import TableauParseError as _ParseError
+    from plumb.parity.runner import run_parity
+
+    if map_file is not None and not map_file.exists():
+        raise _fail(f"map file not found: {map_file}")
+
+    ruleset = _resolve_ruleset(rules, profile)
+    run_id = str(uuid.uuid4())
+    session = None if static_only else _open_session(ruleset, run_id, connection)
+    try:
+        result = run_parity(
+            workbook=workbook,
+            mode=mode,  # type: ignore[arg-type]
+            ruleset=ruleset,
+            store=_baseline_store(),
+            map_path=map_file,
+            session=session,
+            profile_name=profile,
+            run_id=run_id,
+            grain_top_n=grain_top_n,
+        )
+    except (_ParseError, ConfigError) as exc:
+        raise _fail(str(exc)) from exc
+    finally:
+        if session is not None:
+            session.close()
+
+    out_dir = out or LATEST_DIR
+    _write_reports(result, out_dir)
+    try:
+        write_audit_record(result)
+    except OSError as exc:
+        err_console.print(f"[yellow]warning:[/yellow] could not write audit record: {exc}")
+
+    _print_summary(result, out_dir)
+    raise typer.Exit(exit_code_for_verdict(result.verdict, ruleset.defaults.fail_on))
+
+
 # --- baseline -----------------------------------------------------------
 
 @baseline_app.command("create")
@@ -464,9 +575,11 @@ def _resolve_ruleset(rules: Path | None, profile: str | None) -> Ruleset:
     return ruleset
 
 
-def _open_session(ruleset: Ruleset, run_id: str) -> SnowflakeSession:
+def _open_session(
+    ruleset: Ruleset, run_id: str, connection_path: Path | None = None
+) -> SnowflakeSession:
     try:
-        connection = load_connection_profile()
+        connection = load_connection_profile(connection_path)
     except ConfigError as exc:
         raise _fail(
             f"{exc}\nrun 'plumb init' then edit {CONNECTION_FILE}, "

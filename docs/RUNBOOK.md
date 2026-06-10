@@ -91,3 +91,33 @@ Use this exact query for the Gate 1 guardrail verification.
   rules or repin deliberately.
 - ReadOnlyViolation: the SQL contains something that is not a single
   SELECT read. That refusal is by design; see ADR-0003.
+
+## Migration parity play (galaxy / UDM cut-over)
+
+Per workbook, three steps; nothing is eyeballed:
+
+1. **Snapshot the legacy side** (while it still exists):
+   `plumb parity snapshot --workbook sales.twbx --map galaxy-map.yml`
+   The verdict tells you whether capture was complete: M-SNAP-001 fails or
+   errors if any source could not be measured or written. Refused sources
+   (joins, unions, extract-only, published) appear in coverage — decide
+   per case whether they need a manual check.
+2. **Re-point the workbook** at the presentation layer with Tableau
+   Autopilot (`swap-connection` same-schema, or `plan-swap`/`swap-source`
+   when names changed). Autopilot validates, backs up, and saves atomically;
+   parity does not edit workbooks.
+3. **Check the migrated side**:
+   `plumb parity check --workbook sales.twbx --map galaxy-map.yml`
+   Exit 0 = parity proven (READY). Exit 2 = BLOCKED with the drifted
+   objects, columns, and metrics named in the report. Use `--out` to keep
+   per-workbook reports; JUnit output slots into CI.
+
+The map file (galaxy-map.yml) declares old→new object renames, per-object
+keys (distinct-count parity), grain columns (grouped-count parity), column
+renames, and tolerances. Unlisted objects compare under their own names
+(identity); set `defaults: {identity_fallback: false}` to force every
+object to be declared. Snapshots live in the baseline store (shared store
+per ADR-0012 works for a whole team).
+
+Different accounts for legacy and galaxy? Pass `--connection PATH` to
+either phase to use an alternate connection profile file.
