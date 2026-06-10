@@ -17,109 +17,24 @@ from __future__ import annotations
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from jinja2 import Environment
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from plumb import __version__
 from plumb.engine.models import Verdict
 from plumb.parity.contracts import EstateResult, WorkbookParity
 from plumb.report._xml import xml_safe
 
-_env = Environment(autoescape=True)
+# Same design system as report.html.j2: the estate roll-up is the same
+# product surface as the per-run confidence report, and must look like it
+# (user finding: the original ad-hoc inline template read as a different
+# app next to report.html).
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
+_TEMPLATE_NAME = "estate.html.j2"
 
-_TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Plumb estate roll-up</title>
-<style>
-  body { margin:0; font-family:ui-sans-serif,system-ui,sans-serif; background:#07080c;
-    color:#ecedf3; font-size:14px; line-height:1.5; }
-  .shell { max-width:1100px; margin:0 auto; padding:28px 24px 60px; }
-  .top { display:flex; align-items:baseline; gap:10px; margin-bottom:18px; }
-  .logo { font-size:19px; font-weight:700; } .logo .dot { color:#7c6bff; }
-  .top .tag { color:#757a8c; font-size:12px; }
-  .card { background:#0f1117; border:1px solid #1d2030; border-radius:14px;
-    padding:18px; margin-bottom:16px; }
-  .vbig { font-size:28px; font-weight:800; }
-  .meta { color:#a0a6b5; font-size:13px; margin-top:4px; }
-  .meta b { color:#ecedf3; }
-  .v-BLOCKED { color:#ff6b7d; } .v-REVIEW { color:#f5a524; }
-  .v-READY_WITH_NOTES { color:#5aa9ff; } .v-READY { color:#3ddc97; }
-  .v-NONE { color:#757a8c; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #1d2030;
-    vertical-align:top; }
-  th { color:#757a8c; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; }
-  td.mono { font-family:ui-monospace,monospace; font-size:12px; color:#c4c8d3; }
-  .pill { display:inline-block; font-size:11px; font-weight:700; padding:2px 9px;
-    border-radius:999px; }
-  .p-BLOCKED { background:rgba(255,107,125,0.12); color:#ff6b7d; }
-  .p-REVIEW { background:rgba(245,165,36,0.12); color:#f5a524; }
-  .p-READY_WITH_NOTES { background:rgba(90,169,255,0.12); color:#5aa9ff; }
-  .p-READY { background:rgba(61,220,151,0.12); color:#3ddc97; }
-  .p-ERROR { background:rgba(211,107,255,0.12); color:#d36bff; }
-  .p-NONE { background:#1a1d28; color:#757a8c; }
-  .err { color:#ff6b7d; font-size:12px; font-family:ui-monospace,monospace; }
-  footer { color:#757a8c; font-size:12px; text-align:center; padding-top:8px; }
-</style>
-</head>
-<body>
-<div class="shell">
-  <div class="top">
-    <span class="logo">plumb<span class="dot">.</span></span>
-    <span class="tag">estate roll-up</span>
-  </div>
-  <div class="card">
-    <div class="vbig v-{{ rollup }}">{{ rollup_label }}</div>
-    <div class="meta">
-      phase <b>{{ estate.phase }}</b>
-      {% if estate.manifest_ref %} &middot; manifest <b>{{ estate.manifest_ref }}</b>{% endif %}
-      &middot; {{ estate.created_at }}
-    </div>
-    <div class="meta">
-      <b>{{ counts.total }}</b> workbooks &middot;
-      {{ counts.blocked }} blocked &middot; {{ counts.review }} review &middot;
-      {{ counts.notes }} ready with notes &middot; {{ counts.ready }} ready &middot;
-      {{ counts.errored }} errored
-    </div>
-  </div>
-  <div class="card">
-    <table>
-      <thead>
-        <tr>
-          <th>Workbook</th><th>Map</th><th>Snapshot</th>
-          <th>Check</th><th>Worst</th><th>Error</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for row in rows %}
-        <tr>
-          <td class="mono">{{ row.path }}</td>
-          <td class="mono">{{ row.map }}</td>
-          <td><span class="pill p-{{ row.snapshot or 'NONE' }}">{{ row.snapshot or '-' }}\
-</span></td>
-          <td><span class="pill p-{{ row.check or 'NONE' }}">{{ row.check or '-' }}\
-</span></td>
-          <td><span class="pill p-{{ row.worst or 'NONE' }}">{{ row.worst or '-' }}\
-</span></td>
-          <td class="err">{{ row.error }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <footer>
-    Plumb {{ plumb_version }} &middot; deterministic verdict, no AI in the verdict path
-  </footer>
-</div>
-</body>
-</html>
-"""
-
-_template = _env.from_string(_TEMPLATE)
-
+_env = Environment(
+    loader=FileSystemLoader(str(_TEMPLATE_DIR)),
+    autoescape=select_autoescape(["html", "j2"]),
+)
 
 def _row(entry: WorkbookParity) -> dict[str, str]:
     # An errored entry counts as BLOCKED in compute_rollup; its Worst pill
@@ -173,7 +88,7 @@ def render_estate_html(estate: EstateResult) -> str:
         if estate.rollup is not None
         else "No Roll-Up"
     )
-    return _template.render(
+    return _env.get_template(_TEMPLATE_NAME).render(
         estate=estate,
         rollup=rollup,
         rollup_label=rollup_label,
