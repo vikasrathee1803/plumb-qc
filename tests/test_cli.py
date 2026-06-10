@@ -149,3 +149,104 @@ def test_query_file_with_utf8_bom_is_accepted(tmp_path: Path):
         ["check", "sql", "--query", str(query), "--rules", str(RULES), "--static-only"],
     )
     assert result.exit_code == 0, result.output
+
+
+# --- effortless regression: --save-baseline + canonical auto-lookup ---------
+
+R_ONLY_RULES = (
+    "version: \"t\"\n"
+    "checks:\n"
+    "  - id: R-DIFF-001\n"
+    "    enabled: true\n"
+    "  - id: R-AGG-001\n"
+    "    enabled: true\n"
+)
+
+
+def _regression_env(tmp_path, monkeypatch, rows):
+    import plumb.cli as cli
+    from plumb.baseline.store import LocalParquetStore
+    from tests._fakes import RouteSession
+
+    store = LocalParquetStore(tmp_path / "store")
+    session = RouteSession(default_rows=rows)
+    monkeypatch.setattr(cli, "_baseline_store", lambda: store)
+    monkeypatch.setattr(
+        cli, "_open_session", lambda ruleset, run_id, connection_path=None: session
+    )
+    rules = tmp_path / "r.yml"
+    rules.write_text(R_ONLY_RULES, encoding="utf-8")
+    query = tmp_path / "q.sql"
+    query.write_text("SELECT a FROM db.sch.t WHERE a > 0", encoding="utf-8")
+    return store, rules, query
+
+
+def test_save_baseline_then_regression_arms_automatically(tmp_path, monkeypatch):
+    """One --save-baseline, zero ceremony after: the next plain check of the
+    same build finds the canonical auto-baseline and R-DIFF actually runs."""
+    import json
+
+    store, rules, query = _regression_env(tmp_path, monkeypatch, rows=[{"A": 1}])
+    first = runner.invoke(
+        app, ["check", "sql", "--query", str(query), "--rules", str(rules),
+              "--save-baseline", "--out", str(tmp_path / "o1")],
+    )
+    assert first.exit_code == 0, first.output
+    assert "saved" in first.output
+    assert any(n.startswith("auto__") for n in store.list_names())
+
+    second = runner.invoke(
+        app, ["check", "sql", "--query", str(query), "--rules", str(rules),
+              "--out", str(tmp_path / "o2")],
+    )
+    assert second.exit_code == 0, second.output
+    report = json.loads((tmp_path / "o2" / "report.json").read_text(encoding="utf-8"))
+    rdiff = next(c for c in report["checks"] if c["id"] == "R-DIFF-001")
+    assert rdiff["status"] == "PASS"  # armed without naming any baseline
+
+
+def test_save_baseline_refused_on_blocked_run(tmp_path, monkeypatch):
+    """A blocked run must never become the golden copy."""
+    import plumb.cli as cli
+    from plumb.baseline.store import LocalParquetStore
+    from tests._fakes import RouteSession
+
+    store = LocalParquetStore(tmp_path / "store")
+    monkeypatch.setattr(cli, "_baseline_store", lambda: store)
+    monkeypatch.setattr(
+        cli, "_open_session",
+        lambda ruleset, run_id, connection_path=None: RouteSession(default_rows=[{"A": 1}]),
+    )
+    rules = tmp_path / "r.yml"
+    rules.write_text(
+        "version: \"t\"\nchecks:\n  - id: S-STAT-002\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    query = tmp_path / "q.sql"
+    query.write_text("SELECT a FROM t, u", encoding="utf-8")  # cartesian: BLOCKED
+    result = runner.invoke(
+        app, ["check", "sql", "--query", str(query), "--rules", str(rules),
+              "--save-baseline", "--out", str(tmp_path / "o")],
+    )
+    assert result.exit_code == 2
+    assert "NOT saved" in result.output
+    assert store.list_names() == []
+
+
+def test_save_baseline_requires_a_live_run(tmp_path):
+    query = tmp_path / "q.sql"
+    query.write_text("SELECT a FROM db.sch.t", encoding="utf-8")
+    result = runner.invoke(
+        app, ["check", "sql", "--query", str(query), "--rules", str(RULES),
+              "--static-only", "--save-baseline"],
+    )
+    assert result.exit_code == 3
+    assert "live run" in result.output
+
+
+def test_canonical_baseline_name_is_safe_and_stable():
+    from plumb.baseline.store import canonical_baseline_name
+
+    assert canonical_baseline_name("rpt_daily_sales") == "auto__rpt_daily_sales"
+    assert canonical_baseline_name("SQL build") == "auto__sql-build"
+    assert canonical_baseline_name("../weird name!") == "auto__weird-name"

@@ -40,6 +40,8 @@ pipx install plumb        # from the internal package index
 plumb init                                   # scaffold connection profile
 plumb rules pin 2026.06.0                    # pin the team standard
 plumb check sql --query daily_sales.sql --profile finance
+plumb check sql --query daily_sales.sql --save-baseline   # once: freeze a READY
+                                             # run; every later check auto-diffs
 plumb check tableau --workbook daily_sales.twbx
 plumb report open
 ```

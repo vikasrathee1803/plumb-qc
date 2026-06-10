@@ -79,6 +79,9 @@ export async function fetchColumns(sql: string): Promise<ColumnsInfo> {
   return sendJSON<ColumnsInfo>("/api/columns", "POST", { sql });
 }
 
+export const saveBaseline = (sql: string) =>
+  sendJSON<{ ok: boolean; name: string; rows: number }>("/api/baseline/save", "POST", { sql });
+
 export async function fetchLineage(sql: string): Promise<LineageGraph> {
   const r = await fetch("/api/lineage", {
     method: "POST",

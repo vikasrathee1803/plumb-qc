@@ -17,7 +17,12 @@ from rich.console import Console
 from rich.table import Table
 
 from plumb import __version__
-from plumb.baseline.store import BaselineStore, make_baseline, make_baseline_store
+from plumb.baseline.store import (
+    BaselineStore,
+    canonical_baseline_name,
+    make_baseline,
+    make_baseline_store,
+)
 from plumb.checks._sql import SqlParseError, select_all_query
 from plumb.checks._tableau import TableauParseError, parse_workbook
 from plumb.config.loader import (
@@ -262,10 +267,20 @@ def check(
     explain: bool = typer.Option(
         False, "--explain", help="Attach AI explanations to failures (Phase 2)."
     ),
+    save_baseline: bool = typer.Option(
+        False,
+        "--save-baseline",
+        help="After a READY run, save the query output as this build's baseline; "
+        "every later check of the same build diffs against it automatically.",
+    ),
 ) -> None:
     """Run the checks and write the HTML, JSON, and JUnit reports."""
     if kind not in ("sql", "tableau"):
         raise _fail(f"unsupported check kind {kind!r}; use 'sql' or 'tableau'")
+    if save_baseline and kind != "sql":
+        raise _fail("--save-baseline applies to SQL checks")
+    if save_baseline and static_only:
+        raise _fail("--save-baseline needs a live run: the baseline is the query's output")
 
     ruleset = _resolve_ruleset(rules, profile)
     # Generate the run id up front so the session's QUERY_TAG carries the
@@ -292,7 +307,11 @@ def check(
             console.print(f"[dim]{note}[/dim]")
         request_kwargs["sql_text"] = sql_text
         request_kwargs["baseline_store"] = _baseline_store()
-        request_kwargs["baseline_name"] = baseline
+        # Effortless regression: with no explicit name, every SQL build
+        # looks up its canonical auto-baseline. Until one is saved this is
+        # exactly today's "no baseline found" skip; after one --save-baseline
+        # the R-* diff checks arm themselves on every later run.
+        request_kwargs["baseline_name"] = baseline or canonical_baseline_name(target.name)
         if not static_only:
             session = _open_session(ruleset, run_id)
             request_kwargs["session"] = session
@@ -305,6 +324,10 @@ def check(
         # Explain while the session is still open: Cortex runs in-database.
         if explain:
             _attach_ai_explanations(result, request_kwargs.get("sql_text"), session)
+        if save_baseline and session is not None:
+            _save_auto_baseline(
+                result, request_kwargs["sql_text"], target.name, session, ruleset
+            )
     finally:
         if session is not None:
             session.close()
@@ -813,6 +836,42 @@ def _baseline_store() -> BaselineStore:
     cfg = load_baseline_store_config()
     path = Path(cfg.path) if cfg.path else None
     return make_baseline_store(cfg.kind, path)
+
+
+def _save_auto_baseline(
+    result: RunResult,
+    sql_text: str,
+    target_name: str,
+    session: SnowflakeSession,
+    ruleset: Ruleset,
+) -> None:
+    """Persist this run's query output as the build's canonical baseline.
+
+    Only a READY (or READY_WITH_NOTES) run may become the golden copy —
+    freezing a blocked or review-worthy output as truth would make every
+    future regression diff against a known-bad result."""
+    if result.verdict not in (Verdict.READY, Verdict.READY_WITH_NOTES):
+        err_console.print(
+            f"[yellow]baseline NOT saved:[/yellow] this run is {result.verdict.value}; "
+            "fix it first, then re-run with --save-baseline."
+        )
+        return
+    name = canonical_baseline_name(target_name)
+    try:
+        capped = select_all_query(sql_text, ruleset.defaults.max_result_rows)
+        rows = session.execute(capped).rows
+    except (SqlParseError, ReadOnlyViolation, SnowflakeConnectError) as exc:
+        err_console.print(f"[yellow]baseline NOT saved:[/yellow] {exc}")
+        return
+    columns = list(rows[0].keys()) if rows else []
+    baseline = make_baseline(
+        name, columns, list(rows), source_ref=target_name, ruleset_version=ruleset.version
+    )
+    _baseline_store().save(baseline)
+    console.print(
+        f"baseline [bold]{name}[/bold] saved ({baseline.row_count} rows); future "
+        f"checks of this build diff against it automatically"
+    )
 
 
 def _attach_ai_explanations(

@@ -64,6 +64,19 @@ SYSTEM$TYPEOF probe and the post-swap inversion path.
 3. **Scheduled re-verification** — a thin `plumb watch` over the existing
    snapshot/check loop would answer the observability gap without
    becoming Soda; consider only if teams ask.
+4. **Published-datasource contract check** — the team's workbooks use
+   standalone published data sources, so a workbook-side live column
+   check sees nothing; the honest version interrogates the PUBLISHED
+   datasource via Tableau's REST/Metadata API (tableauserverclient is
+   already a dependency, PAT auth already configured in settings) and
+   compares its columns to the warehouse objects. Needs its own plan.
+
+Shipped 2026-06-10 (daily-QC uplift wave): `--save-baseline` +
+canonical auto-baselines (R-* checks arm themselves after one save, CLI
+and web), T-CALC-003 deleted-calculation references (narrowed to
+internal calc names after the fixture proved bare-ref judging would be
+noise), and the engine now converts a crashing check into an honest
+ERROR result instead of a crashed run.
 
 Rejected 2026-06-10 (user decision): estate-style bulk for
 `check tableau`/`check sql` — real workbook files are heavy, and parsing

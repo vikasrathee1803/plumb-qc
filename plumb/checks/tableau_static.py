@@ -9,10 +9,37 @@ with the SQL static policy (ADR-0010).
 
 from __future__ import annotations
 
+import re
+
 from plumb.checks import _tableau
 from plumb.checks._base import build_result
 from plumb.engine.models import CheckFamily, ExecutionType, Severity, Status
 from plumb.engine.registry import CheckContext, register_check
+
+# Formula scrubbing for T-CALC-003. Refs are judged only after string
+# literals, comments, and QUALIFIED refs ([Datasource].[Field] /
+# [Parameters].[X]) are removed: qualified refs point outside the parsed
+# field list (the parser deliberately drops the Parameters datasource, and
+# blends cross datasources), so judging them would manufacture noise.
+_TCALC_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_TCALC_LINE_COMMENT = re.compile(r"//[^\n]*")
+_TCALC_STRING_LIT = re.compile(r"'[^']*'|\"[^\"]*\"")
+_TCALC_QUALIFIED_REF = re.compile(r"\[[^\]]+\]\s*\.\s*\[[^\]]+\]")
+# Tableau's internal name for a (renamed) calculated field. These can never
+# come from a database, so an unresolved one is definitively a deleted calc
+# — the only reference class judgeable statically with zero noise (plain DB
+# columns are usually NOT materialized as <column> elements in the XML, so
+# a bare unknown ref is normal, not a finding).
+_TCALC_INTERNAL_CALC = re.compile(r"^\[Calculation_[0-9]+\]$")
+
+
+def _formula_refs(formula: str) -> set[str]:
+    """The bare [Field] references a formula resolves locally."""
+    text = _TCALC_BLOCK_COMMENT.sub(" ", formula)
+    text = _TCALC_LINE_COMMENT.sub(" ", text)
+    text = _TCALC_STRING_LIT.sub(" ", text)
+    text = _TCALC_QUALIFIED_REF.sub(" ", text)
+    return set(_tableau._FIELD_REF.findall(text))
 
 
 def _workbook(ctx: CheckContext, check_id: str):
@@ -255,6 +282,56 @@ def t_unused_001(ctx: CheckContext, params: dict):
             remediation="Unused calcs add maintenance cost and confuse reviewers.",
         )
     return build_result(ctx, "T-UNUSED-001", Status.PASS, observed="no unused calculated fields")
+
+
+@register_check(
+    check_id="T-CALC-003",
+    name="Calculation references a deleted calculation",
+    family=CheckFamily.TABLEAU_STATIC,
+    default_severity=Severity.MEDIUM,
+    execution_type=ExecutionType.STATIC,
+)
+def t_calc_003(ctx: CheckContext, params: dict):
+    """A formula referencing another calc by its internal name
+    ([Calculation_NNN]) where no such calc exists: the referenced calc was
+    deleted and this formula is broken (Tableau shows it as invalid).
+    Deliberately judges ONLY internal calc names — bare references like
+    [Amount] are usually database columns that the .twb never materializes
+    as <column> elements, so judging them would manufacture noise. String
+    literals, comments, and qualified/parameter references are exempt; a
+    FAIL here is always a real defect."""
+    wb, skip = _workbook(ctx, "T-CALC-003")
+    if skip is not None:
+        return skip
+    defined: set[str] = set()
+    for f in wb.fields:
+        if f.name:
+            defined.add(f.name if f.name.startswith("[") else f"[{f.name}]")
+        if f.caption:
+            defined.add(f"[{f.caption}]")
+    rows = []
+    for f in wb.calculated_fields():
+        for ref in sorted(_formula_refs(f.formula or "") - defined):
+            if _TCALC_INTERNAL_CALC.match(ref):
+                rows.append(
+                    {"calculation": f.caption, "datasource": f.datasource, "missing": ref}
+                )
+    if rows:
+        missing = sorted({r["missing"] for r in rows})
+        shown = ", ".join(missing[:6]) + (" …" if len(missing) > 6 else "")
+        return build_result(
+            ctx, "T-CALC-003", Status.FAIL,
+            observed=f"{len(rows)} reference(s) to deleted calculation(s): {shown}",
+            expected="every calculation a formula references still exists",
+            evidence_rows=rows[:10],
+            remediation="The referenced calculated field was deleted; Tableau shows "
+            "this formula as invalid. Restore the calc or remove the reference "
+            "before publishing.",
+        )
+    return build_result(
+        ctx, "T-CALC-003", Status.PASS,
+        observed=f"{len(wb.calculated_fields())} calculation(s), no deleted-calc references",
+    )
 
 
 @register_check(

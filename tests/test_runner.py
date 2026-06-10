@@ -158,3 +158,31 @@ def test_environment_carries_query_tag_warehouse_role():
     assert result.environment.role == "PLUMB_QC_ROLE"
     assert result.environment.query_tag == "plumb_qc:test-run"
     assert result.run_id == "fixed-run"
+
+
+def test_crashing_check_becomes_error_result(monkeypatch):
+    """A check that raises (bad driver row shape, check bug) must surface as
+    an ERROR result that caps the verdict honestly - never crash the run and
+    take every other check result down with it. Pins a real crash: D-DUP-001
+    KeyError on an unexpected result shape 500-ed the whole web run."""
+    import plumb.engine.runner as runner_mod
+    from plumb.engine.models import ExecutionType, Severity
+    from plumb.engine.registry import CheckDefinition
+
+    def boom(ctx, params):
+        raise KeyError("__UNEXPECTED_SHAPE")
+
+    crash = CheckDefinition(
+        check_id="S-STAT-001", name="boom", family=CheckFamily.STATIC,
+        default_severity=Severity.HIGH, execution_type=ExecutionType.STATIC, fn=boom,
+    )
+    monkeypatch.setattr(runner_mod, "get_check", lambda cid: crash)
+    ruleset = Ruleset(version="t", checks=[CheckSpec(id="S-STAT-001", enabled=True)])
+    result = run_checks(
+        RunRequest(target=Target(type="sql", name="t"), ruleset=ruleset, sql_text="SELECT 1")
+    )
+    (check,) = result.checks
+    assert check.status is Status.ERROR
+    assert "check crashed" in check.observed
+    assert "KeyError" in check.observed
+    assert result.verdict is Verdict.REVIEW  # HIGH-severity ERROR caps at REVIEW

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -71,6 +72,22 @@ def compute_aggregates(columns: list[str], rows: list[dict[str, Any]]) -> dict[s
             aggregates[f"sum:{col}"] = total
             aggregates[f"count:{col}"] = float(non_null)
     return aggregates
+
+
+_CANONICAL_UNSAFE = re.compile(r"[^a-z0-9_-]+")
+
+
+def canonical_baseline_name(target_name: str) -> str:
+    """The baseline name a SQL build gets when nobody names one.
+
+    Effortless regression: `--save-baseline` stores under this name and
+    every later check of the same build looks it up automatically, so the
+    R-* diff checks arm themselves after one save instead of skipping
+    forever. The `auto__` prefix keeps user-named baselines out of the
+    convention's way; the name is filesystem-safe (it becomes a parquet
+    filename)."""
+    cleaned = _CANONICAL_UNSAFE.sub("-", target_name.lower()).strip("-") or "sql-build"
+    return f"auto__{cleaned}"
 
 
 def make_baseline(

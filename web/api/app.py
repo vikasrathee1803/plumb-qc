@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
 from plumb import __version__
-from plumb.baseline.store import make_baseline_store
+from plumb.baseline.store import canonical_baseline_name, make_baseline, make_baseline_store
 from plumb.checks._sql import SqlParseError
 from plumb.checks._tableau import TableauParseError, parse_workbook
 from plumb.config.loader import (
@@ -219,6 +219,14 @@ class SqlCheckRequest(BaseModel):
     baseline: str | None = None
     explain: bool = False
     checks: list[CheckConfig] | None = None
+
+
+# Module level, like every request model: postponed annotations (PEP 563)
+# make FastAPI resolve endpoint type hints from module globals, so a class
+# defined inside create_app() silently degrades to a query parameter.
+class BaselineSaveRequest(BaseModel):
+    sql: str
+    name: str | None = None
 
 
 def _ruleset_path(name: str | None) -> Path:
@@ -744,20 +752,20 @@ def create_app() -> FastAPI:
             session = _open_session(ruleset, run_id)
         cfg = load_baseline_store_config()
         store = make_baseline_store(cfg.kind, Path(cfg.path) if cfg.path else None)
+        target_name = build.target_name or _sql_target_name(build_sql)
         try:
             result = run_checks(
                 RunRequest(
-                    target=Target(
-                        type="sql",
-                        name=build.target_name or _sql_target_name(build_sql),
-                        source_ref=None,
-                    ),
+                    target=Target(type="sql", name=target_name, source_ref=None),
                     ruleset=ruleset,
                     sql_text=build_sql,
                     profile=req.profile,
                     session=session,
                     baseline_store=store,
-                    baseline_name=req.baseline,
+                    # Effortless regression: no explicit name means the
+                    # build's canonical auto-baseline ("no baseline found"
+                    # until one is saved, then every run diffs).
+                    baseline_name=req.baseline or canonical_baseline_name(target_name),
                     run_id=run_id,
                 )
             )
@@ -771,6 +779,43 @@ def create_app() -> FastAPI:
         if build.notes:
             payload["build_notes"] = build.notes
         return payload
+
+    @app.post("/api/baseline/save")
+    def baseline_save(req: BaselineSaveRequest) -> dict[str, Any]:
+        """Save the query's current output as its canonical baseline, arming
+        the R-* regression checks for every later run of the same build."""
+        if not req.sql.strip():
+            raise HTTPException(status_code=400, detail="sql is required")
+        if len(req.sql) > _MAX_SQL_CHARS:
+            raise HTTPException(status_code=400, detail="SQL is too large")
+        try:
+            build = extract_build_query(req.sql)
+        except BuildExtractError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        from plumb.checks._sql import select_all_query
+
+        ruleset = load_ruleset(DEFAULT_RULES, enforce_pin=False)
+        target_name = build.target_name or _sql_target_name(build.sql)
+        name = req.name or canonical_baseline_name(target_name)
+        run_id = str(uuid.uuid4())
+        session = _open_session(ruleset, run_id)
+        try:
+            capped = select_all_query(build.sql, ruleset.defaults.max_result_rows)
+            rows = session.execute(capped).rows
+        except SqlParseError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            session.close()
+        columns = list(rows[0].keys()) if rows else []
+        cfg = load_baseline_store_config()
+        store = make_baseline_store(cfg.kind, Path(cfg.path) if cfg.path else None)
+        store.save(
+            make_baseline(
+                name, columns, list(rows),
+                source_ref=target_name, ruleset_version=ruleset.version,
+            )
+        )
+        return {"ok": True, "name": name, "rows": len(rows)}
 
     @app.post("/api/check/tableau")
     async def check_tableau(

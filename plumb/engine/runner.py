@@ -94,7 +94,21 @@ def run_checks(request: RunRequest) -> RunResult:
             # Not relevant to this target type (for example a SQL check on a
             # Tableau target). Do not emit a result; coverage stays focused.
             continue
-        outcome = definition.fn(ctx, spec.params)
+        try:
+            outcome = definition.fn(ctx, spec.params)
+        except Exception as exc:  # noqa: BLE001 - a crashing check must become
+            # an ERROR result, never a crashed run: ERROR is surfaced
+            # separately, caps the verdict honestly (ADR-0001), and the other
+            # checks still report. An unexpected driver row shape or a check
+            # bug must not take down the whole verdict surface with it.
+            outcome = CheckResult(
+                id=definition.check_id,
+                name=definition.name,
+                family=definition.family,
+                severity=definition.default_severity,
+                status=Status.ERROR,
+                observed=f"check crashed: {type(exc).__name__}: {exc}",
+            )
         if isinstance(outcome, list):
             results.extend(outcome)
         else:

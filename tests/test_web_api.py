@@ -702,3 +702,41 @@ def test_map_build_validates_through_the_real_model():
     assert r.status_code == 400
     detail = r.json()["detail"]
     assert "old" in detail or "new" in detail
+
+
+# --- effortless regression from the browser ---------------------------------
+
+
+def test_baseline_save_endpoint_arms_regression(monkeypatch):
+    import web.api.app as webapp
+    from tests._fakes import RouteSession
+
+    session = RouteSession(default_rows=[{"A": 1}])
+    monkeypatch.setattr(webapp, "_open_session", lambda ruleset, run_id: session)
+    save = client.post(
+        "/api/baseline/save", json={"sql": "SELECT a FROM db.sch.t WHERE a > 0"}
+    )
+    assert save.status_code == 200, save.text
+    body = save.json()
+    assert body["ok"] is True
+    assert body["name"].startswith("auto__")
+    assert body["rows"] == 1
+
+    # A later plain run of the same build finds the canonical baseline
+    # automatically: R-DIFF runs instead of skipping forever.
+    run = client.post(
+        "/api/check/sql",
+        json={"sql": "SELECT a FROM db.sch.t WHERE a > 0", "static_only": False},
+    ).json()
+    rdiff = next(c for c in run["checks"] if c["id"] == "R-DIFF-001")
+    assert rdiff["status"] == "PASS"
+
+
+def test_baseline_save_without_connection_is_503():
+    r = client.post("/api/baseline/save", json={"sql": "SELECT a FROM db.sch.t"})
+    assert r.status_code == 503
+
+
+def test_baseline_save_requires_sql():
+    r = client.post("/api/baseline/save", json={"sql": "   "})
+    assert r.status_code == 400

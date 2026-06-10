@@ -139,6 +139,8 @@ checks:
     enabled: true
   - id: T-CALC-002
     enabled: true
+  - id: T-CALC-003
+    enabled: true
   - id: T-NAME-001
     enabled: true
   - id: T-UNUSED-001

@@ -19,6 +19,11 @@ os.environ.setdefault(
 _cfg = tempfile.mkdtemp(prefix="plumb-test-cfg-")
 os.environ.setdefault("PLUMB_CONNECTION_FILE", os.path.join(_cfg, "connection.yml"))
 os.environ.setdefault("PLUMB_TABLEAU_FILE", os.path.join(_cfg, "tableau.yml"))
+# Isolate the baseline store: no test may ever write a real ~/.plumb baseline
+# (the /api/baseline/save endpoint and --save-baseline genuinely persist).
+os.environ.setdefault(
+    "PLUMB_BASELINE_DIR", tempfile.mkdtemp(prefix="plumb-test-baselines-")
+)
 
 # Use an in-memory keychain so the suite never writes to the real OS keyring.
 import keyring  # noqa: E402

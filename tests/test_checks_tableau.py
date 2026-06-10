@@ -9,6 +9,7 @@ from plumb.checks._tableau import parse_workbook
 from plumb.checks.tableau_static import (
     t_calc_001,
     t_calc_002,
+    t_calc_003,
     t_filt_001,
     t_lod_001,
     t_name_001,
@@ -95,7 +96,7 @@ class TestCatalog:
     def test_uncertified_source_warns_when_no_list_configured(self, workbook):
         """Cycle-2 consistency fix: with no certified_sources configured the
         check cannot fully assert governance, so it WARNs (note, not REVIEW)
-        — mirroring S-META-004, which skips when unconfigured. A HIGH fail
+        â€” mirroring S-META-004, which skips when unconfigured. A HIGH fail
         on every unconfigured team's first run is alert fatigue, not QC."""
         res = t_src_003(_ctx(workbook), {})
         assert res.status is Status.WARN
@@ -176,3 +177,90 @@ class TestCatalog:
 def test_family_is_tableau_static(workbook):
     res = t_src_001(_ctx(workbook), {})
     assert res.family is CheckFamily.TABLEAU_STATIC
+
+
+# --- T-CALC-003: dangling field references ----------------------------------
+
+
+def _wb_from_xml(tmp_path, xml: str):
+    p = tmp_path / "wb.twb"
+    p.write_text(xml, encoding="utf-8")
+    return parse_workbook(p)
+
+
+def _calc_twb(formula: str, extra_columns: str = "") -> str:
+    return (
+        "<?xml version='1.0' encoding='utf-8' ?>\n"
+        "<workbook version='18.1'><datasources>"
+        "<datasource caption='Sales' name='federated.1'>"
+        "<connection class='federated' />"
+        "<column caption='Amount' datatype='real' name='[AMOUNT]' role='measure' />"
+        "<column caption='Region' datatype='string' name='[REGION]' role='dimension' />"
+        + extra_columns +
+        "<column caption='My Calc' datatype='real' name='[Calculation_1]' role='measure'>"
+        f"<calculation class='tableau' formula=\"{formula}\" />"
+        "</column>"
+        "</datasource></datasources><worksheets /></workbook>"
+    )
+
+
+class TestTCalc003:
+    def test_resolving_references_pass(self, tmp_path):
+        wb = _wb_from_xml(tmp_path, _calc_twb("SUM([AMOUNT]) / 100"))
+        res = t_calc_003(_ctx(wb), {})
+        assert res.status is Status.PASS
+
+    def test_deleted_calc_reference_fails_naming_it(self, tmp_path):
+        """[Calculation_NNN] never comes from a database: unresolved means
+        the referenced calc was deleted and this formula is broken."""
+        wb = _wb_from_xml(tmp_path, _calc_twb("[Calculation_99] + SUM([AMOUNT])"))
+        res = t_calc_003(_ctx(wb), {})
+        assert res.status is Status.FAIL
+        assert "[Calculation_99]" in res.observed
+        assert res.evidence.sample_rows[0]["missing"] == "[Calculation_99]"
+
+    def test_bare_unknown_refs_are_not_judged(self, tmp_path):
+        """Plain DB columns are usually NOT materialized as <column>
+        elements in the .twb (the representative fixture proves it), so a
+        bare unknown reference is normal — flagging it would be noise."""
+        wb = _wb_from_xml(tmp_path, _calc_twb("SUM([SOME_DB_COLUMN]) + SUM([AMOUNT])"))
+        res = t_calc_003(_ctx(wb), {})
+        assert res.status is Status.PASS
+
+    def test_existing_calc_reference_resolves(self, tmp_path):
+        extra = (
+            "<column caption='Base' datatype='real' name='[Calculation_42]' role='measure'>"
+            "<calculation class='tableau' formula='SUM([AMOUNT])' /></column>"
+        )
+        wb = _wb_from_xml(tmp_path, _calc_twb("[Calculation_42] * 2", extra))
+        res = t_calc_003(_ctx(wb), {})
+        assert res.status is Status.PASS
+
+    def test_caption_reference_resolves(self, tmp_path):
+        """Formulas sometimes reference by caption after a rename; a caption
+        match is a resolved field, never a finding."""
+        wb = _wb_from_xml(tmp_path, _calc_twb("SUM([Amount])"))
+        res = t_calc_003(_ctx(wb), {})
+        assert res.status is Status.PASS
+
+    def test_parameter_and_qualified_refs_are_exempt(self, tmp_path):
+        """[Parameters].[X] and [Other DS].[Field] resolve outside the parsed
+        field list; judging them would manufacture noise."""
+        wb = _wb_from_xml(
+            tmp_path, _calc_twb("[AMOUNT] * [Parameters].[Rate] + [Blend DS].[Fx]")
+        )
+        res = t_calc_003(_ctx(wb), {})
+        assert res.status is Status.PASS
+
+    def test_brackets_in_strings_and_comments_are_ignored(self, tmp_path):
+        wb = _wb_from_xml(
+            tmp_path,
+            _calc_twb("// uses [OLD_NAME]&#10;IF [REGION] = '[N/A]' THEN 0 ELSE [AMOUNT] END"),
+        )
+        res = t_calc_003(_ctx(wb), {})
+        assert res.status is Status.PASS
+
+    def test_fixture_workbook_is_clean(self, workbook):
+        """The representative fixture must not trip the check (noise gate)."""
+        res = t_calc_003(_ctx(workbook), {})
+        assert res.status is Status.PASS

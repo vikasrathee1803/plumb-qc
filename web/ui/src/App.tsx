@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAbout, fetchCatalog, fetchConnection, fetchHistory, fetchProfileChanges,
-  fetchProfiles, fetchRun, fetchRulesetChecks, runSql, runTableau,
+  fetchProfiles, fetchRun, fetchRulesetChecks, runSql, runTableau, saveBaseline,
 } from "./api";
 import { Architecture } from "./Architecture";
 import { ChecksEditor, CustomChecksEditor } from "./Customize";
@@ -211,6 +211,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [baselineMsg, setBaselineMsg] = useState("");
   const { runs: history, total: historyTotal, refresh: refreshHistory } = useHistory();
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -233,7 +234,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
   );
 
   async function run() {
-    setBusy(true); setError(""); setResult(null);
+    setBusy(true); setError(""); setResult(null); setBaselineMsg("");
     try {
       const customSpecs: CheckState[] = validCustom.map((c) => ({
         id: "D-CUSTOM-001", enabled: true, params: { name: c.name, sql: c.sql, severity: c.severity },
@@ -245,6 +246,14 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
       setResult(r); refreshHistory();
     } catch (e) { setError(String(e instanceof Error ? e.message : e)); }
     finally { setBusy(false); }
+  }
+
+  async function keepBaseline() {
+    setBaselineMsg("saving…");
+    try {
+      const r = await saveBaseline(sql);
+      setBaselineMsg(`Baseline ${r.name} saved (${r.rows} rows) — future runs compare against it automatically.`);
+    } catch (e) { setBaselineMsg(String(e instanceof Error ? e.message : e)); }
   }
   const runRef = useRef(run); runRef.current = run;
   useEffect(() => {
@@ -289,8 +298,20 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)}
         onSelect={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
 
-      {result ? <Report result={result} onSelectRun={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
-        : <div className="empty">Ready when you are. Press <kbd>⌘↵</kbd> to run, or open Customize.</div>}
+      {result ? (
+        <>
+          <Report result={result} onSelectRun={(id) => fetchRun(id).then(setResult).catch(() => undefined)} />
+          {live && (result.verdict === "READY" || result.verdict === "READY_WITH_NOTES") && (
+            <div className="note" style={{ textAlign: "center", marginTop: 10 }}>
+              {baselineMsg || (
+                <button className="ghost" onClick={keepBaseline}>
+                  Save this output as the baseline — future runs auto-compare
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      ) : <div className="empty">Ready when you are. Press <kbd>⌘↵</kbd> to run, or open Customize.</div>}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title="Customize checks">
         <div className="dgroup-label">Preset</div>
