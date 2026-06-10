@@ -152,3 +152,25 @@ checks:
     params: { required: false }
   - id: T-TOTAL-001
     enabled: true
+  # Migration parity checks (PARITY-PLAN). Applied only to a parity target;
+  # value checks self-skip in the snapshot phase and in static-only runs,
+  # so enabling them here costs nothing outside `plumb parity`.
+  - id: M-SRC-001
+    enabled: true
+  - id: M-MAP-001
+    enabled: true
+  - id: M-SNAP-001
+    enabled: true
+  - id: M-SCHEMA-001
+    enabled: true
+  - id: M-ROW-001
+    enabled: true
+    params: { tolerance_pct: 0.0 }
+  - id: M-AGG-001
+    enabled: true
+  - id: M-NULL-001
+    enabled: true
+  - id: M-DIST-001
+    enabled: true
+  - id: M-GRAIN-001
+    enabled: true
