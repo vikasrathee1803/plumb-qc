@@ -18,7 +18,7 @@ from plumb.config.models import Ruleset
 from plumb.engine.models import RunResult, Status, Verdict
 from plumb.parity.runner import run_parity
 from tests._fakes import RouteSession, callable_session
-from tests._parity_fixtures import TWB_CUSTOM_SQL, TWB_TWO_TABLES, write_twb
+from tests._parity_fixtures import TWB_CUSTOM_SQL, TWB_JOIN, TWB_TWO_TABLES, write_twb
 
 M_IDS = [
     "M-SRC-001",
@@ -132,6 +132,38 @@ class TestSnapshotPhase:
         assert by_id(result, "M-SRC-001") is Status.PASS
         assert by_id(result, "M-SNAP-001") is Status.SKIP
 
+    def test_store_save_value_error_is_verdict_visible(self, tmp_path: Path):
+        """QC F8: pyarrow failures (ValueError/TypeError subclasses) during
+        store.save must land in bundle.errors -> M-SNAP-001 ERROR."""
+
+        class ExplodingStore(LocalParquetStore):
+            def save(self, baseline: object) -> None:
+                raise ValueError("ArrowInvalid: could not convert")
+
+        wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
+        result = run_parity(
+            workbook=wb,
+            mode="snapshot",
+            ruleset=parity_ruleset(),
+            store=ExplodingStore(tmp_path / "store"),
+            session=RouteSession(routes=[("SELECT COUNT(*)", [{"ROW_COUNT": 42}])]),
+        )
+        assert by_id(result, "M-SNAP-001") is Status.ERROR
+        assert result.verdict in (Verdict.BLOCKED, Verdict.REVIEW)
+
+    def test_refused_relations_reach_coverage_as_m_src_002(self, tmp_path: Path):
+        """QC F6: a refused join lands in coverage.checks_skipped with its
+        reason; M-SRC-001 stays the verdict-bearing result."""
+        wb = write_twb(tmp_path, TWB_JOIN, "joined.twb")
+        store = LocalParquetStore(tmp_path / "store")
+        result = run_parity(
+            workbook=wb, mode="snapshot", ruleset=parity_ruleset(), store=store, session=None
+        )
+        skipped = {c.id: c for c in result.coverage.checks_skipped}
+        assert "M-SRC-002" in skipped
+        assert "join" in skipped["M-SRC-002"].reason
+        assert "Orders + Customers (Join)" in skipped["M-SRC-002"].reason
+
 
 class TestCheckPhase:
     def _snapshot_then_check(
@@ -163,6 +195,72 @@ class TestCheckPhase:
         result = self._snapshot_then_check(tmp_path, 42, 50)
         assert by_id(result, "M-ROW-001") is Status.FAIL
         assert result.verdict is Verdict.BLOCKED
+
+    def test_corrupt_snapshot_fails_loud_not_traceback(self, tmp_path: Path):
+        """QC F8: a truncated/corrupt snapshot parquet surfaces as a named
+        M-SNAP-001 FAIL through bundle.errors, never an exception."""
+        wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
+        store = LocalParquetStore(tmp_path / "store")
+        run_parity(
+            workbook=wb,
+            mode="snapshot",
+            ruleset=parity_ruleset(),
+            store=store,
+            session=RouteSession(routes=[("SELECT COUNT(*)", [{"ROW_COUNT": 42}])]),
+        )
+        parquet_files = list((tmp_path / "store").glob("*.parquet"))
+        assert len(parquet_files) == 1
+        parquet_files[0].write_bytes(b"this is not parquet")
+        result = run_parity(
+            workbook=wb,
+            mode="check",
+            ruleset=parity_ruleset(),
+            store=store,
+            session=RouteSession(routes=[("SELECT COUNT(*)", [{"ROW_COUNT": 42}])]),
+        )
+        check = next(c for c in result.checks if c.id == "M-SNAP-001")
+        assert check.status is Status.FAIL
+        assert "snapshot unreadable" in (check.observed or "")
+        assert result.verdict is Verdict.BLOCKED
+
+    def test_pre_codec_snapshot_rejected_loud(self, tmp_path: Path):
+        """QC F11: a snapshot written without the codec record (an older
+        build) is refused with a named error, never decoded silently."""
+        from plumb.baseline.store import Baseline
+        from plumb.parity.contracts import RECORD_COLUMNS
+
+        wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
+        store = LocalParquetStore(tmp_path / "store")
+        run_parity(
+            workbook=wb,
+            mode="snapshot",
+            ruleset=parity_ruleset(),
+            store=store,
+            session=RouteSession(routes=[("SELECT COUNT(*)", [{"ROW_COUNT": 42}])]),
+        )
+        name = store.list_names()[0]
+        legacy_rows = [
+            {"kind": "object_fqn", "column": None, "value": None, "text": "custom-sql"},
+            {"kind": "row_count", "column": None, "value": 42.0, "text": None},
+        ]
+        store.save(
+            Baseline(
+                name=name,
+                columns=list(RECORD_COLUMNS),
+                rows=legacy_rows,
+                row_count=len(legacy_rows),
+            )
+        )
+        result = run_parity(
+            workbook=wb,
+            mode="check",
+            ruleset=parity_ruleset(),
+            store=store,
+            session=RouteSession(routes=[("SELECT COUNT(*)", [{"ROW_COUNT": 42}])]),
+        )
+        check = next(c for c in result.checks if c.id == "M-SNAP-001")
+        assert check.status is Status.FAIL
+        assert "codec" in (check.observed or "")
 
     def test_check_without_snapshot_blocks(self, tmp_path: Path):
         wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")

@@ -102,15 +102,19 @@ Per workbook, three steps; nothing is eyeballed:
    errors if any source could not be measured or written. Refused sources
    (joins, unions, extract-only, published) appear in coverage — decide
    per case whether they need a manual check.
-2. **Re-point the workbook** at the presentation layer with Tableau
-   Autopilot (`swap-connection` same-schema, or `plan-swap`/`swap-source`
-   when names changed). Autopilot validates, backs up, and saves atomically;
-   parity does not edit workbooks.
-3. **Check the migrated side**:
+2. **Check the migrated side — against the SAME (pre-swap) workbook**:
    `plumb parity check --workbook sales.twbx --map galaxy-map.yml`
+   The workbook is the manifest of legacy objects; the map supplies the
+   new names. Do not run `check` on a re-pointed copy: after a rename
+   swap its relations carry the new FQNs, so snapshots and map entries no
+   longer match and every renamed object reads as a missing snapshot.
    Exit 0 = parity proven (READY). Exit 2 = BLOCKED with the drifted
    objects, columns, and metrics named in the report. Use `--out` to keep
    per-workbook reports; JUnit output slots into CI.
+3. **Re-point and publish** once parity is proven: Tableau Autopilot
+   (`swap-connection` same-schema, or `plan-swap`/`swap-source` when names
+   changed) validates, backs up, and saves atomically; parity never edits
+   workbooks.
 
 The map file (galaxy-map.yml) declares old→new object renames, per-object
 keys (distinct-count parity), grain columns (grouped-count parity), column

@@ -72,6 +72,12 @@ ITEMS_NAME = snapshot_name(PREFIX, REL_ITEMS)
 CUSTOM_NAME = snapshot_name(PREFIX, REL_CUSTOM)
 
 
+def one(outcome):
+    """Unwrap a check outcome to its main result (m_src_001 returns a list:
+    its M-SRC-001 result first, then any M-SRC-002 coverage records)."""
+    return outcome[0] if isinstance(outcome, list) else outcome
+
+
 def ctx_for(bundle: ParityBundle | None = None, extras: dict | None = None) -> CheckContext:
     if extras is None:
         extras = {EXTRAS_KEY: bundle} if bundle is not None else {}
@@ -158,6 +164,22 @@ def two_object_bundle(
     return make_bundle(resolution=resolution, snapshots=snapshots, live=live, errors=errors)
 
 
+def _custom_sql_only_bundle(errors: dict[str, str] | None = None) -> ParityBundle:
+    """A check-phase bundle whose only relation is custom SQL (row counts
+    only, target_fqn empty)."""
+    resolution = MappingResolution(
+        resolved=[ResolvedObject(relation=REL_CUSTOM, target_fqn="")]
+    )
+    live = {} if errors else {CUSTOM_NAME: metrics("custom-sql", rows=10)}
+    return make_bundle(
+        relations=[REL_CUSTOM],
+        resolution=resolution,
+        snapshots={CUSTOM_NAME: metrics("custom-sql", rows=10)},
+        live=live,
+        errors=errors,
+    )
+
+
 class TestRegistration:
     def test_all_nine_checks_registered(self):
         import plumb.checks  # noqa: F401 - registration side effects
@@ -184,13 +206,13 @@ class TestRegistration:
 class TestNoBundleGuard:
     @pytest.mark.parametrize("fn", ALL_CHECK_FNS)
     def test_no_extras_skips(self, fn):
-        res = fn(ctx_for(extras={}), {})
+        res = one(fn(ctx_for(extras={}), {}))
         assert res.status is Status.SKIP
         assert "no parity bundle" in res.observed
 
     @pytest.mark.parametrize("fn", ALL_CHECK_FNS)
     def test_wrong_type_in_extras_skips(self, fn):
-        res = fn(ctx_for(extras={EXTRAS_KEY: "not a bundle"}), {})
+        res = one(fn(ctx_for(extras={EXTRAS_KEY: "not a bundle"}), {}))
         assert res.status is Status.SKIP
         assert "no parity bundle" in res.observed
 
@@ -221,25 +243,54 @@ class TestValueCheckPhaseGates:
 class TestMSrc001:
     def test_all_eligible_passes_with_counts(self):
         bundle = make_bundle(relations=[REL_ORDERS, REL_ITEMS, REL_CUSTOM])
-        res = m_src_001(ctx_for(bundle), {})
+        results = m_src_001(ctx_for(bundle), {})
+        assert [r.id for r in results] == ["M-SRC-001"]
+        res = results[0]
         assert res.status is Status.PASS
         assert res.observed == "2 table relation(s), 1 custom-SQL"
 
     def test_refused_warns_naming_datasource_and_reason(self):
         bundle = make_bundle(relations=[REL_ORDERS, REL_REFUSED])
-        res = m_src_001(ctx_for(bundle), {})
+        res = one(m_src_001(ctx_for(bundle), {}))
         assert res.status is Status.WARN
         assert "Blended" in res.observed
         assert "join" in res.observed
 
     def test_zero_eligible_fails(self):
-        res = m_src_001(ctx_for(make_bundle(relations=[REL_REFUSED])), {})
+        res = one(m_src_001(ctx_for(make_bundle(relations=[REL_REFUSED])), {}))
         assert res.status is Status.FAIL
 
     def test_runs_in_snapshot_mode_too(self):
         bundle = make_bundle(mode="snapshot", relations=[REL_ORDERS])
-        res = m_src_001(ctx_for(bundle), {})
+        res = one(m_src_001(ctx_for(bundle), {}))
         assert res.status is Status.PASS
+
+    def test_each_refusal_emits_an_m_src_002_skip(self):
+        """QC F6: every refused relation becomes an M-SRC-002 SKIP record
+        so it reaches Coverage.checks_skipped with its reason."""
+        from plumb.engine.models import CheckFamily, Severity
+
+        other_refused = SourceRelation(
+            datasource="Offline", kind="refused", refusal_reason="extract-only"
+        )
+        bundle = make_bundle(relations=[REL_ORDERS, REL_REFUSED, other_refused])
+        results = m_src_001(ctx_for(bundle), {})
+        assert results[0].id == "M-SRC-001"
+        assert results[0].status is Status.WARN
+        skips = [r for r in results if r.id == "M-SRC-002"]
+        assert len(skips) == 2
+        for skip in skips:
+            assert skip.status is Status.SKIP
+            assert skip.severity is Severity.INFO
+            assert skip.family is CheckFamily.MIGRATION_PARITY
+            assert skip.name == "Refused source relation"
+        assert skips[0].observed == "Blended: join"
+        assert skips[1].observed == "Offline: extract-only"
+
+    def test_refusal_records_emitted_even_when_main_result_fails(self):
+        results = m_src_001(ctx_for(make_bundle(relations=[REL_REFUSED])), {})
+        assert results[0].status is Status.FAIL
+        assert [r.observed for r in results if r.id == "M-SRC-002"] == ["Blended: join"]
 
 
 class TestMMap001:
@@ -383,14 +434,28 @@ class TestMSchema001:
         assert res.status is Status.PASS
 
     def test_not_found_error_fails_naming_object(self):
+        # The exact message prefix metrics._discover_columns emits.
         bundle = two_object_bundle(
             snap_orders=metrics(ORDERS_TARGET, columns={"AMOUNT": col()}),
             live_orders=None,
-            errors={ORDERS_NAME: f"Object '{ORDERS_TARGET}' not found or not authorized"},
+            errors={ORDERS_NAME: f"object not found: {ORDERS_TARGET}"},
         )
         res = m_schema_001(ctx_for(bundle), {})
         assert res.status is Status.FAIL
         assert ORDERS_TARGET in res.observed
+
+    def test_incidental_not_found_text_is_error_not_fail(self):
+        """QC F9: only the metrics-emitted "object not found:" prefix may
+        classify as a missing target; other errors mentioning "not found"
+        are measurement errors."""
+        bundle = two_object_bundle(
+            snap_orders=metrics(ORDERS_TARGET, columns={"AMOUNT": col()}),
+            live_orders=None,
+            errors={ORDERS_NAME: "could not resolve host: not found"},
+        )
+        res = m_schema_001(ctx_for(bundle), {})
+        assert res.status is Status.ERROR
+        assert "could not resolve host" in res.observed
 
     def test_other_measurement_error_errors(self):
         bundle = two_object_bundle(
@@ -539,6 +604,23 @@ class TestMAgg001:
         res = m_agg_001(ctx_for(bundle), {})
         assert res.status is Status.PASS
 
+    def test_custom_sql_only_pass_does_not_overstate_coverage(self):
+        """QC F13: custom-SQL pairs carry row counts only; the PASS text
+        must not claim aggregate coverage over them."""
+        bundle = _custom_sql_only_bundle()
+        res = m_agg_001(ctx_for(bundle), {})
+        assert res.status is Status.PASS
+        assert "0 object(s) with column metrics" in res.observed
+
+    def test_error_naming_uses_label_when_target_fqn_empty(self):
+        """QC F13: a custom-SQL relation (target_fqn == "") is named by its
+        label in error text, never by an empty string."""
+        bundle = _custom_sql_only_bundle(errors={CUSTOM_NAME: "statement timeout"})
+        res = m_agg_001(ctx_for(bundle), {})
+        assert res.status is Status.ERROR
+        assert REL_CUSTOM.label in res.observed
+        assert "statement timeout" in res.observed
+
 
 class TestMNull001:
     def test_null_drift_relative_to_row_count(self):
@@ -560,6 +642,12 @@ class TestMNull001:
         assert res.status is Status.FAIL
         assert "AMOUNT" in res.observed
         assert ORDERS_TARGET in res.observed
+
+    def test_custom_sql_only_pass_does_not_overstate_coverage(self):
+        """QC F13: same honesty rule as M-AGG-001."""
+        res = m_null_001(ctx_for(_custom_sql_only_bundle()), {})
+        assert res.status is Status.PASS
+        assert "0 object(s) with column metrics" in res.observed
 
 
 class TestMDist001:
@@ -590,6 +678,29 @@ class TestMDist001:
         )
         res = m_dist_001(ctx_for(bundle), {})
         assert res.status is Status.PASS
+
+    def test_declared_key_unmeasured_on_one_side_warns(self):
+        """QC F3b: a snapshot taken before the key was declared in the map
+        must WARN with re-snapshot advice, never PASS."""
+        bundle = two_object_bundle(
+            snap_orders=metrics(ORDERS_TARGET),  # no distinct_counts captured
+            live_orders=metrics(ORDERS_TARGET, distinct={"ORDER_ID": 100}),
+            orders_kw={"keys": ("ORDER_ID",)},
+        )
+        res = m_dist_001(ctx_for(bundle), {})
+        assert res.status is Status.WARN
+        assert "ORDER_ID" in res.observed
+        assert "snapshot" in res.remediation
+        assert "map" in res.remediation
+
+    def test_breach_still_fails_when_another_key_is_unmeasured(self):
+        bundle = two_object_bundle(
+            snap_orders=metrics(ORDERS_TARGET, distinct={"ORDER_ID": 100}),
+            live_orders=metrics(ORDERS_TARGET, distinct={"ORDER_ID": 50}),
+            orders_kw={"keys": ("ORDER_ID", "ITEM_ID"), "tolerance_pct": 0.0},
+        )
+        res = m_dist_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
 
 
 class TestMGrain001:
@@ -653,3 +764,18 @@ class TestMGrain001:
         res = m_grain_001(ctx_for(bundle), {})
         assert res.status is Status.PASS
         assert "top-N" in res.observed
+
+    def test_grain_declared_but_unmeasured_on_both_sides_warns(self):
+        """QC F3b: grain declared in the map but absent from both sides'
+        measurements (snapshot predates the declaration) must WARN with
+        re-snapshot advice, never PASS."""
+        bundle = two_object_bundle(
+            snap_orders=metrics(ORDERS_TARGET),
+            live_orders=metrics(ORDERS_TARGET),
+            orders_kw=self.GRAIN_KW,
+        )
+        res = m_grain_001(ctx_for(bundle), {})
+        assert res.status is Status.WARN
+        assert ORDERS_TARGET in res.observed
+        assert "snapshot" in res.remediation
+        assert "map" in res.remediation

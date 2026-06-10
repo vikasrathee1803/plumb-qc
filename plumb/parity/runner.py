@@ -101,9 +101,15 @@ def _load_snapshots(bundle: ParityBundle, store: BaselineStore) -> None:
         return
     for resolved in bundle.resolution.resolved:
         name = snapshot_name(bundle.snapshot_prefix, resolved.relation)
-        baseline = store.load(name)
-        if baseline is not None:
-            bundle.snapshots[name] = ParityMetrics.from_records(baseline.rows)
+        try:
+            baseline = store.load(name)
+            if baseline is not None:
+                bundle.snapshots[name] = ParityMetrics.from_records(baseline.rows)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            # A corrupt or foreign-codec snapshot must fail loudly, never
+            # half-load: the relation stays out of bundle.snapshots so
+            # M-SNAP-001 reports it, with the cause recorded here.
+            bundle.errors[name] = f"snapshot unreadable: {exc}"
 
 
 def _measure_and_store(
@@ -139,7 +145,9 @@ def _measure_and_store(
                     ruleset_version=ruleset.version,
                 )
             )
-        except OSError as exc:
+        except (OSError, ValueError, TypeError) as exc:
+            # pyarrow raises ArrowInvalid / ArrowTypeError, which subclass
+            # ValueError / TypeError; a dropped write must be verdict-visible.
             bundle.errors[name] = f"snapshot write failed: {exc}"
             continue
         bundle.live_metrics[name] = metrics

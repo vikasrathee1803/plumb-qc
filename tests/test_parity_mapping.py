@@ -180,6 +180,39 @@ class TestLoadMap:
         with pytest.raises(ConfigError, match="2- or 3-part"):
             load_map(path)
 
+    def test_tolerance_above_one_rejected_in_defaults(self, tmp_path: Path) -> None:
+        """QC F14: tolerance_pct is a fraction; 5 (500%) must fail loud."""
+        path = write_map(tmp_path, "version: 1\ndefaults:\n  tolerance_pct: 5\n")
+        with pytest.raises(ConfigError, match="tolerance_pct"):
+            load_map(path)
+
+    def test_tolerance_above_one_rejected_per_object(self, tmp_path: Path) -> None:
+        path = write_map(
+            tmp_path,
+            "version: 1\n"
+            "objects:\n"
+            "  - old: A.B.C\n"
+            "    new: X.Y.Z\n"
+            "    tolerance_pct: 5\n",
+        )
+        with pytest.raises(ConfigError, match="tolerance_pct"):
+            load_map(path)
+
+    def test_duplicate_new_column_names_rejected(self, tmp_path: Path) -> None:
+        """QC F15: {A: X, B: X} maps two old columns onto one new column."""
+        path = write_map(
+            tmp_path,
+            "version: 1\n"
+            "objects:\n"
+            "  - old: A.B.C\n"
+            "    new: X.Y.Z\n"
+            "    columns:\n"
+            "      a: x\n"
+            "      b: X\n",
+        )
+        with pytest.raises(ConfigError, match="duplicate column rename target"):
+            load_map(path)
+
 
 class TestParseFqn:
     def test_three_part_parses(self) -> None:
@@ -301,6 +334,25 @@ class TestResolve:
         resolution = resolve([table_relation()], parity_map)
         assert len(resolution.resolved) == 1
         assert resolution.resolved[0].target_fqn == "G.P.FCT_ORDERS"
+
+    def test_bare_table_never_tail_matches_multi_part_entry(self) -> None:
+        """QC F7a: a 1-part name must not tail-match FINANCE.ORDERS."""
+        parity_map = make_map(objects=[{"old": "FINANCE.ORDERS", "new": "G.P.FCT_ORDERS"}])
+        relation = table_relation(database=None, schema=None, table="ORDERS")  # type: ignore[arg-type]
+        assert relation.fqn == "ORDERS"
+        resolution = resolve([relation], parity_map)
+        assert resolution.resolved == []
+        assert resolution.unmapped == [relation]
+
+    def test_short_fqn_never_identity_resolves(self) -> None:
+        """QC F7b: fewer than 3 parts cannot name the same object on both
+        sides, so identity fallback must not apply."""
+        parity_map = make_map()  # identity_fallback defaults to True
+        relation = table_relation(database=None)
+        assert relation.fqn == "SALES.ORDERS"
+        resolution = resolve([relation], parity_map)
+        assert resolution.resolved == []
+        assert resolution.unmapped == [relation]
 
     def test_different_table_does_not_match(self) -> None:
         parity_map = make_map(

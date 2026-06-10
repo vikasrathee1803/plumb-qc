@@ -33,8 +33,12 @@ legacy side and compares the migrated side against them.
    extracts OVER live relations are eligible (parity is proven against the
    warehouse objects the extract refreshes from).
 7. **Aggregates, not row hashes.** O(1) result size, warehouse-side compute,
-   row-cap friendly; tolerances handle float drift (row tolerance defaults
-   to 0.0, aggregate tolerance to 0.01, both overridable per object).
+   row-cap friendly; tolerances handle float drift. Aggregate tolerance
+   defaults to 0.01 and is overridable per object in the map. Row-count
+   tolerance is a run-level check param only (default 0.0), deliberately
+   NOT per-object: per-object loosening of row counts is the silent-drift
+   front door. All tolerances are fractions (0.01 = 1%), capped at 1.0.
+   (Amended after QC review, 2026-06-09.)
 8. **One live session per run.** The other side is always the snapshot
    store; `CheckContext` is unchanged. The M-* checks are pure comparisons
    over a ParityBundle the runner assembles — each metric query runs exactly

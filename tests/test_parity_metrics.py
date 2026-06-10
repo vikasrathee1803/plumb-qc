@@ -370,24 +370,57 @@ class TestDeterminism:
 
 
 class TestMissingDeclaredColumns:
-    """Judgment call pinned: a declared key missing from the discovered
-    columns is omitted from the aggregate; a missing grain column skips the
-    grain query entirely. M-SCHEMA-001 names the missing column."""
+    """QC F3a pinned: a declared key or grain column missing from the
+    discovered columns raises ParityMetricsError naming the column(s) and
+    the object — never a silent omission that overstates the proof."""
 
-    def test_missing_key_omitted_from_aggregate(self) -> None:
+    def test_missing_key_raises_naming_column_and_object(self) -> None:
         session = table_session()
-        metrics = measure(
-            session, resolved_table(keys=("ORDER_ID", "NOT_A_COLUMN")), "legacy"
-        )
-        aggregate = session.executed[1]
-        assert "NOT_A_COLUMN" not in aggregate
-        assert 'COUNT(DISTINCT "ORDER_ID")' in aggregate
-        assert metrics.distinct_counts == {"ORDER_ID": 100}
+        with pytest.raises(ParityMetricsError) as excinfo:
+            measure(session, resolved_table(keys=("ORDER_ID", "NOT_A_COLUMN")), "legacy")
+        message = str(excinfo.value)
+        assert "NOT_A_COLUMN" in message
+        assert LEGACY_FQN in message
+        assert "key" in message
+        # Discovery ran, but no aggregate was issued on a partial key set.
+        assert len(session.executed) == 1
 
-    def test_missing_grain_column_skips_grain_query(self) -> None:
+    def test_missing_grain_column_raises_naming_column_and_object(self) -> None:
         session = table_session()
-        metrics = measure(
-            session, resolved_table(grain=("ORDER_DATE", "NOT_A_COLUMN")), "legacy"
+        with pytest.raises(ParityMetricsError) as excinfo:
+            measure(session, resolved_table(grain=("ORDER_DATE", "NOT_A_COLUMN")), "legacy")
+        message = str(excinfo.value)
+        assert "NOT_A_COLUMN" in message
+        assert LEGACY_FQN in message
+        assert "grain" in message
+
+
+class TestGrainValueStringification:
+    """QC F18: numeric grain values stringify canonically, so the same
+    warehouse value compares equal whatever Python type the driver used."""
+
+    def _grain_groups_for(self, value: object) -> dict[str, str]:
+        session = (
+            RouteSession()
+            .add("INFORMATION_SCHEMA.COLUMNS", discovery_rows())
+            .add("GROUP BY", [{"G_0": value, "G_1": "EMEA", "GROUP_COUNT": 1}])
+            .add("COUNT(*) AS ROW_COUNT", [AGGREGATE_ROW])
         )
-        assert metrics.grain_groups == []
-        assert len(session.executed) == 2  # discovery + aggregate only
+        metrics = measure(session, resolved_table(), "legacy")
+        return metrics.grain_groups[0].group
+
+    def test_decimal_float_and_int_integral_values_identical(self) -> None:
+        from decimal import Decimal
+
+        groups = [self._grain_groups_for(v) for v in (Decimal("5"), 5.0, 5)]
+        assert groups[0] == groups[1] == groups[2]
+        assert groups[0]["ORDER_DATE"] == "5"
+
+    def test_non_integral_values_stringify_as_float_repr(self) -> None:
+        from decimal import Decimal
+
+        assert self._grain_groups_for(Decimal("5.5"))["ORDER_DATE"] == repr(5.5)
+        assert self._grain_groups_for(5.5)["ORDER_DATE"] == repr(5.5)
+
+    def test_null_keeps_sentinel(self) -> None:
+        assert self._grain_groups_for(None)["ORDER_DATE"] == NULL_GROUP_VALUE

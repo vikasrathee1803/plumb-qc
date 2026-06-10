@@ -74,3 +74,47 @@ def test_shared_config_requires_path():
 
     with pytest.raises(Exception, match="shared baseline store requires a path"):
         BaselineStoreConfig(kind="shared")
+
+
+def test_save_is_atomic_when_failing_between_writes(tmp_path: Path, monkeypatch):
+    """QC F12: a failure between the parquet write and the manifest write
+    leaves the previously saved pair fully intact — never a mixed or
+    half-written pair."""
+    import pytest
+
+    store = LocalParquetStore(tmp_path)
+    store.save(make_baseline("b", ["REGION", "AMOUNT"], ROWS, ruleset_version="1"))
+
+    new_rows = [{"REGION": "EAST", "AMOUNT": 999}]
+
+    def exploding_write_text(self: Path, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", exploding_write_text)
+    with pytest.raises(OSError, match="disk full"):
+        store.save(make_baseline("b", ["REGION", "AMOUNT"], new_rows, ruleset_version="2"))
+    monkeypatch.undo()
+
+    assert store.exists("b")
+    loaded = store.load("b")
+    assert loaded is not None
+    assert loaded.rows == ROWS  # the old pair, untouched
+    assert loaded.ruleset_version == "1"
+
+
+def test_failed_first_save_leaves_nothing_loadable(tmp_path: Path, monkeypatch):
+    import pytest
+
+    store = LocalParquetStore(tmp_path)
+
+    def exploding_write_text(self: Path, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", exploding_write_text)
+    with pytest.raises(OSError):
+        store.save(make_baseline("fresh", ["REGION"], [{"REGION": "EAST"}]))
+    monkeypatch.undo()
+
+    assert not store.exists("fresh")
+    assert store.load("fresh") is None
+    assert "fresh" not in store.list_names()

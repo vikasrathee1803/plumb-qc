@@ -14,6 +14,7 @@ from plumb.parity.contracts import (
     REFUSAL_EXTRACT_ONLY,
     REFUSAL_JOIN,
     REFUSAL_UNION,
+    REFUSAL_UNRECOGNIZED,
 )
 from plumb.parity.sources import REFUSAL_PUBLISHED, extract_relations
 from tests._parity_fixtures import (
@@ -98,6 +99,134 @@ TWB_UNION = (
           <relation connection='snowflake.uni1' name='ORDERS_2025'
             table='[SALES].[ORDERS_2025]' type='table' />
         </relation>
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>
+"""
+)
+
+
+TWB_NO_RELATIONS = (
+    _HEADER
+    + """
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='Empty Connection' name='federated.empty0'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='acme' name='snowflake.empty1'>
+            <connection class='snowflake' dbname='LEGACY_DB' schema='SALES' />
+          </named-connection>
+        </named-connections>
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>
+"""
+)
+
+TWB_FCP_WRAPPED = (
+    _HEADER
+    + """
+<workbook version='2021.4'>
+  <datasources>
+    <datasource caption='Object Model' name='federated.fcp0'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='acme' name='snowflake.fcp1'>
+            <connection class='snowflake' dbname='LEGACY_DB' schema='SALES' />
+          </named-connection>
+        </named-connections>
+        <_.fcp.ObjectModelEncapsulateLegacy.true...relation>
+          <relation connection='snowflake.fcp1' name='ORDERS'
+            table='[SALES].[ORDERS]' type='table' />
+        </_.fcp.ObjectModelEncapsulateLegacy.true...relation>
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>
+"""
+)
+
+TWB_FCP_TYPED_WRAPPER = (
+    _HEADER
+    + """
+<workbook version='2021.4'>
+  <datasources>
+    <datasource caption='Object Model Direct' name='federated.fcp2'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='acme' name='snowflake.fcp3'>
+            <connection class='snowflake' dbname='LEGACY_DB' schema='SALES' />
+          </named-connection>
+        </named-connections>
+        <_.fcp.ObjectModelEncapsulateLegacy.true...relation
+          connection='snowflake.fcp3' name='ORDERS'
+          table='[SALES].[ORDERS]' type='table' />
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>
+"""
+)
+
+TWB_FEDERATED_HYPER = (
+    _HEADER
+    + """
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='Hyper Backed' name='federated.hyp0'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='extract' name='hyper.hyp1'>
+            <connection class='hyper' dbname='Data/Extracts/x.hyper' />
+          </named-connection>
+        </named-connections>
+        <relation connection='hyper.hyp1' name='Extract'
+          table='[Extract].[Extract]' type='table' />
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>
+"""
+)
+
+TWB_FEDERATED_POSTGRES = (
+    _HEADER
+    + """
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='Postgres Source' name='federated.pg0'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='pg' name='postgres.pg1'>
+            <connection class='postgres' dbname='appdb' schema='public' />
+          </named-connection>
+        </named-connections>
+        <relation connection='postgres.pg1' name='orders'
+          table='[public].[orders]' type='table' />
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>
+"""
+)
+
+TWB_THREE_PART_TABLE = (
+    _HEADER
+    + """
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='Cross DB' name='federated.xdb0'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='acme' name='snowflake.xdb1'>
+            <connection class='snowflake' dbname='LEGACY_DB' schema='SALES' />
+          </named-connection>
+        </named-connections>
+        <relation connection='snowflake.xdb1' name='T'
+          table='[OTHER_DB].[S].[T]' type='table' />
       </connection>
     </datasource>
   </datasources>
@@ -215,3 +344,68 @@ def test_legacy_direct_connection_shape(tmp_path):
 def test_missing_workbook_raises_parse_error(tmp_path):
     with pytest.raises(TableauParseError):
         extract_relations(tmp_path / "does-not-exist.twb")
+
+
+class TestDatasourceNeverVanishes:
+    """QC F1a: a datasource that produced no relations must still emit
+    exactly one refused relation, never disappear from the list."""
+
+    def test_connection_without_relations_refused_unrecognized(self, tmp_path):
+        relations = extract_relations(write_twb(tmp_path, TWB_NO_RELATIONS))
+        assert len(relations) == 1
+        rel = relations[0]
+        assert rel.kind == "refused"
+        assert rel.refusal_reason == REFUSAL_UNRECOGNIZED
+        assert rel.datasource == "Empty Connection"
+
+
+class TestObjectModelWrappers:
+    """QC F1b: best-effort handling of the Tableau object-model wrapper
+    (`_.fcp.ObjectModelEncapsulateLegacy.true...relation`)."""
+
+    def test_untyped_wrapper_descends_to_inner_table_relation(self, tmp_path):
+        relations = extract_relations(write_twb(tmp_path, TWB_FCP_WRAPPED))
+        assert len(relations) == 1
+        rel = relations[0]
+        assert rel.kind == "table"
+        assert rel.fqn == "LEGACY_DB.SALES.ORDERS"
+        assert rel.connection_class == "snowflake"
+
+    def test_typed_wrapper_processed_as_the_relation_itself(self, tmp_path):
+        relations = extract_relations(write_twb(tmp_path, TWB_FCP_TYPED_WRAPPER))
+        assert len(relations) == 1
+        rel = relations[0]
+        assert rel.kind == "table"
+        assert rel.fqn == "LEGACY_DB.SALES.ORDERS"
+
+
+class TestConnectionClassGating:
+    """QC F2: the resolved connection class gates relation eligibility."""
+
+    def test_federated_hyper_named_connection_refused_extract_only(self, tmp_path):
+        relations = extract_relations(write_twb(tmp_path, TWB_FEDERATED_HYPER))
+        assert len(relations) == 1
+        rel = relations[0]
+        assert rel.kind == "refused"
+        assert rel.refusal_reason == REFUSAL_EXTRACT_ONLY
+        assert rel.connection_class == "hyper"
+
+    def test_postgres_relation_refused_as_unsupported_connection(self, tmp_path):
+        relations = extract_relations(write_twb(tmp_path, TWB_FEDERATED_POSTGRES))
+        assert len(relations) == 1
+        rel = relations[0]
+        assert rel.kind == "refused"
+        assert rel.refusal_reason == "unsupported-connection:postgres"
+        assert rel.connection_class == "postgres"
+
+
+def test_three_part_table_attr_overrides_connection_dbname(tmp_path):
+    """QC F17: [DB2].[SCH].[TBL] names its own database."""
+    relations = extract_relations(write_twb(tmp_path, TWB_THREE_PART_TABLE))
+    assert len(relations) == 1
+    rel = relations[0]
+    assert rel.kind == "table"
+    assert rel.database == "OTHER_DB"
+    assert rel.schema == "S"
+    assert rel.table == "T"
+    assert rel.fqn == "OTHER_DB.S.T"

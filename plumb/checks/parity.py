@@ -132,11 +132,18 @@ def _comparable(
     return pairs, errored
 
 
+def _object_name(resolved: ResolvedObject) -> str:
+    """The name to show for a resolved relation: its target FQN, or the
+    relation label when no target name exists (custom SQL resolves with an
+    empty target_fqn — naming it "" would hide the offender)."""
+    return resolved.target_fqn or resolved.relation.label
+
+
 def _measurement_error(
     ctx: CheckContext, check_id: str, errored: list[tuple[ResolvedObject, str]]
 ) -> CheckResult:
     """A failed measurement must never read as a pass: overall ERROR."""
-    detail = _named([f"{r.target_fqn} ({msg})" for r, msg in errored])
+    detail = _named([f"{_object_name(r)} ({msg})" for r, msg in errored])
     return build_result(
         ctx,
         check_id,
@@ -153,14 +160,17 @@ def _measurement_error(
     default_severity=Severity.HIGH,
     execution_type=ExecutionType.STATIC,
 )
-def m_src_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_src_001(ctx: CheckContext, params: dict[str, Any]) -> list[CheckResult]:
+    """Returns the M-SRC-001 result plus one M-SRC-002 SKIP per refused
+    relation, so every refusal lands in Coverage.checks_skipped with its
+    reason (coverage honesty, PARITY-PLAN S4.2)."""
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-SRC-001")
+        return [_no_bundle_skip(ctx, "M-SRC-001")]
     eligible = [r for r in bundle.relations if r.kind in ("table", "custom_sql")]
     refused = [r for r in bundle.relations if r.kind == "refused"]
     if not eligible:
-        return build_result(
+        main = build_result(
             ctx,
             "M-SRC-001",
             Status.FAIL,
@@ -169,9 +179,9 @@ def m_src_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             remediation="Join/union/extract-only datasources are refused (PARITY-PLAN D6); "
             "parity needs at least one table or custom-SQL relation.",
         )
-    if refused:
+    elif refused:
         names = _named([f"{r.datasource} ({r.refusal_reason or 'unknown'})" for r in refused])
-        return build_result(
+        main = build_result(
             ctx,
             "M-SRC-001",
             Status.WARN,
@@ -180,14 +190,28 @@ def m_src_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             remediation="Refused datasources are not covered by parity; verify them manually "
             "or restructure to single-table / custom-SQL sources.",
         )
-    tables = sum(1 for r in eligible if r.kind == "table")
-    custom = sum(1 for r in eligible if r.kind == "custom_sql")
-    return build_result(
-        ctx,
-        "M-SRC-001",
-        Status.PASS,
-        observed=f"{tables} table relation(s), {custom} custom-SQL",
-    )
+    else:
+        tables = sum(1 for r in eligible if r.kind == "table")
+        custom = sum(1 for r in eligible if r.kind == "custom_sql")
+        main = build_result(
+            ctx,
+            "M-SRC-001",
+            Status.PASS,
+            observed=f"{tables} table relation(s), {custom} custom-SQL",
+        )
+    # M-SRC-002 is emitted per refusal rather than registered: it exists
+    # only as a coverage record, never as a rulable check.
+    return [main] + [
+        CheckResult(
+            id="M-SRC-002",
+            name="Refused source relation",
+            family=CheckFamily.MIGRATION_PARITY,
+            severity=Severity.INFO,
+            status=Status.SKIP,
+            observed=f"{r.datasource}: {r.refusal_reason or 'unknown'}",
+        )
+        for r in refused
+    ]
 
 
 @register_check(
@@ -283,11 +307,19 @@ def m_snap_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
         if snapshot_name(bundle.snapshot_prefix, r.relation) not in bundle.snapshots
     ]
     if missing:
+        # An unreadable snapshot (recorded in bundle.errors by the runner)
+        # is named with its cause, not just as absent.
+        detail = _named(
+            [
+                f"{name} ({bundle.errors[name]})" if name in bundle.errors else name
+                for name in missing
+            ]
+        )
         return build_result(
             ctx,
             "M-SNAP-001",
             Status.FAIL,
-            observed=f"{len(missing)} missing snapshot(s): {_named(missing)}",
+            observed=f"{len(missing)} missing snapshot(s): {detail}",
             expected="a legacy snapshot per resolved relation",
             remediation=(
                 f"run: plumb parity snapshot --workbook {bundle.workbook_path} "
@@ -334,7 +366,10 @@ def m_schema_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             message = bundle.errors.get(name)
             if message is None:
                 continue
-            if "not found" in message.lower():
+            # Exact prefix emitted by metrics._discover_columns: substring
+            # matching would misclassify unrelated errors that merely
+            # contain the words "not found".
+            if message.startswith("object not found:"):
                 failures.append(f"{resolved.target_fqn}: target object not found")
                 evidence.append(
                     {"object": resolved.target_fqn, "column": None, "issue": "object not found"}
@@ -416,14 +451,14 @@ def m_row_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
         diff = _rel_diff(old, new)
         evidence.append(
             {
-                "object": pair.resolved.target_fqn,
+                "object": _object_name(pair.resolved),
                 "legacy_rows": old,
                 "target_rows": new,
                 "diff_pct": round(diff * 100, 4),
             }
         )
         if diff > tol:
-            breaches.append((diff, pair.resolved.target_fqn, old, new))
+            breaches.append((diff, _object_name(pair.resolved), old, new))
     if breaches:
         breaches.sort(key=lambda b: (-b[0], b[1]))
         _, fqn, old, new = breaches[0]
@@ -471,9 +506,13 @@ def m_agg_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
         return _measurement_error(ctx, "M-AGG-001", errored)
     breaches: list[tuple[float, dict[str, Any]]] = []
     compared = 0
+    with_columns = 0
     for pair in pairs:
         tol = pair.resolved.tolerance_pct
-        for col in sorted(set(pair.snap.columns) & set(pair.live.columns)):
+        shared = sorted(set(pair.snap.columns) & set(pair.live.columns))
+        if shared:
+            with_columns += 1
+        for col in shared:
             old_col, new_col = pair.snap.columns[col], pair.live.columns[col]
             for metric, old, new in (
                 ("sum", old_col.sum_value, new_col.sum_value),
@@ -489,7 +528,7 @@ def m_agg_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
                         (
                             diff,
                             {
-                                "object": pair.resolved.target_fqn,
+                                "object": _object_name(pair.resolved),
                                 "column": col,
                                 "metric": metric,
                                 "legacy": old,
@@ -513,11 +552,16 @@ def m_agg_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             remediation="A summed or bounding value drifted between legacy and target; "
             "investigate the named columns before publishing.",
         )
+    # Count only relations with column metrics on both sides: custom-SQL
+    # pairs carry row counts only and must not inflate the claim.
     return build_result(
         ctx,
         "M-AGG-001",
         Status.PASS,
-        observed=f"{compared} aggregate(s) match within tolerance across {len(pairs)} object(s)",
+        observed=(
+            f"{compared} aggregate(s) match within tolerance across "
+            f"{with_columns} object(s) with column metrics"
+        ),
     )
 
 
@@ -542,9 +586,13 @@ def m_null_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
         return _measurement_error(ctx, "M-NULL-001", errored)
     breaches: list[tuple[float, dict[str, Any]]] = []
     compared = 0
+    with_columns = 0
     for pair in pairs:
         tol = pair.resolved.tolerance_pct
-        for col in sorted(set(pair.snap.columns) & set(pair.live.columns)):
+        shared = sorted(set(pair.snap.columns) & set(pair.live.columns))
+        if shared:
+            with_columns += 1
+        for col in shared:
             compared += 1
             old = pair.snap.columns[col].null_count
             new = pair.live.columns[col].null_count
@@ -557,7 +605,7 @@ def m_null_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
                     (
                         diff,
                         {
-                            "object": pair.resolved.target_fqn,
+                            "object": _object_name(pair.resolved),
                             "column": col,
                             "legacy_nulls": old,
                             "target_nulls": new,
@@ -582,7 +630,10 @@ def m_null_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
         ctx,
         "M-NULL-001",
         Status.PASS,
-        observed=f"null counts match for {compared} column(s) across {len(pairs)} object(s)",
+        observed=(
+            f"null counts match for {compared} column(s) across "
+            f"{with_columns} object(s) with column metrics"
+        ),
     )
 
 
@@ -611,11 +662,16 @@ def m_dist_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     if errored:
         return _measurement_error(ctx, "M-DIST-001", errored)
     breaches: list[tuple[float, dict[str, Any]]] = []
+    unmeasured: list[str] = []
     compared = 0
     for pair in (p for p in pairs if p.resolved.keys):
         tol = pair.resolved.tolerance_pct
         for key in pair.resolved.keys:
             if key not in pair.snap.distinct_counts or key not in pair.live.distinct_counts:
+                # Declared in the map but absent from at least one side's
+                # measurement (typically a snapshot taken before the key
+                # was declared): silently skipping would overstate proof.
+                unmeasured.append(f"{key} on {_object_name(pair.resolved)}")
                 continue
             compared += 1
             old = pair.snap.distinct_counts[key]
@@ -626,7 +682,7 @@ def m_dist_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
                     (
                         diff,
                         {
-                            "object": pair.resolved.target_fqn,
+                            "object": _object_name(pair.resolved),
                             "key": key,
                             "legacy_distinct": old,
                             "target_distinct": new,
@@ -646,6 +702,19 @@ def m_dist_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             evidence_rows=[b for _, b in breaches[:_DETAIL_CAP]],
             remediation="Distinct-key drift means dropped or duplicated entities in the "
             "target object; check the new layer's grain.",
+        )
+    if unmeasured:
+        return build_result(
+            ctx,
+            "M-DIST-001",
+            Status.WARN,
+            observed=(
+                f"{len(unmeasured)} declared key(s) not measured on both sides: "
+                f"{_named(unmeasured)}"
+            ),
+            expected="every declared key measured in both the snapshot and the live side",
+            remediation="The snapshot predates the key declaration in the map; re-run "
+            "plumb parity snapshot with the current map, then check again.",
         )
     return build_result(
         ctx,
@@ -684,8 +753,15 @@ def m_grain_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     if errored:
         return _measurement_error(ctx, "M-GRAIN-001", errored)
     breaches: list[dict[str, Any]] = []
+    unmeasured: list[str] = []
     compared = 0
     for pair in (p for p in pairs if p.resolved.grain):
+        if not pair.snap.grain_groups and not pair.live.grain_groups:
+            # Grain declared but neither side carries grain groups: the
+            # snapshot predates the grain declaration. Not comparable —
+            # and not silently a pass.
+            unmeasured.append(_object_name(pair.resolved))
+            continue
         compared += 1
         tol = pair.resolved.tolerance_pct
         old_groups = _grain_counts(pair.snap)
@@ -694,7 +770,7 @@ def m_grain_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             if group not in new_groups:
                 breaches.append(
                     {
-                        "object": pair.resolved.target_fqn,
+                        "object": _object_name(pair.resolved),
                         "group": group,
                         "legacy_count": old_groups[group],
                         "target_count": None,
@@ -704,7 +780,7 @@ def m_grain_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             elif _rel_diff(old_groups[group], new_groups[group]) > tol:
                 breaches.append(
                     {
-                        "object": pair.resolved.target_fqn,
+                        "object": _object_name(pair.resolved),
                         "group": group,
                         "legacy_count": old_groups[group],
                         "target_count": new_groups[group],
@@ -714,7 +790,7 @@ def m_grain_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
         for group in sorted(set(new_groups) - set(old_groups)):
             breaches.append(
                 {
-                    "object": pair.resolved.target_fqn,
+                    "object": _object_name(pair.resolved),
                     "group": group,
                     "legacy_count": None,
                     "target_count": new_groups[group],
@@ -735,6 +811,19 @@ def m_grain_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             evidence_rows=breaches[:_DETAIL_CAP],
             remediation="A grain group moved between legacy and target; verify the group-by "
             "keys and any re-bucketing in the new layer.",
+        )
+    if unmeasured:
+        return build_result(
+            ctx,
+            "M-GRAIN-001",
+            Status.WARN,
+            observed=(
+                f"declared grain not measured on either side for "
+                f"{len(unmeasured)} object(s): {_named(unmeasured)}"
+            ),
+            expected="grain groups captured in both the snapshot and the live side",
+            remediation="The snapshot predates the grain declaration in the map; re-run "
+            "plumb parity snapshot with the current map, then check again.",
         )
     return build_result(
         ctx,

@@ -36,6 +36,9 @@ REFUSAL_PUBLISHED = "published"
 # source. A datasource backed only by these is refused as extract-only.
 _NON_RELATIONAL_CLASSES = frozenset({"hyper", "dataengine"})
 
+# The only live connection class parity can measure (PARITY-PLAN scope).
+_SUPPORTED_CLASS = "snowflake"
+
 _BRACKETED_PART = re.compile(r"\[([^\]]+)\]")
 
 
@@ -93,23 +96,52 @@ def _datasource_relations(ds: etree._Element, caption: str) -> list[SourceRelati
                 inner = nc.find("connection")
                 if nc_name and inner is not None:
                     lookup[nc_name] = inner
-            for rel in conn.findall("relation"):
+            for rel in _direct_relations(conn):
                 emitted.append(_build_relation(rel, lookup, None, caption, has_extract))
         elif conn_class in _NON_RELATIONAL_CLASSES:
             non_relational_only = True
         else:
             # Legacy direct shape: <connection class='snowflake'> with its
             # relations as direct children; the connection resolves itself.
-            for rel in conn.findall("relation"):
+            for rel in _direct_relations(conn):
                 emitted.append(_build_relation(rel, {}, conn, caption, has_extract))
 
-    if not emitted and (has_extract or non_relational_only):
-        return [
-            SourceRelation(
-                datasource=caption, kind="refused", refusal_reason=REFUSAL_EXTRACT_ONLY
-            )
-        ]
+    if not emitted:
+        # A datasource may never vanish from the relation list: anything we
+        # could not decompose is refused with a reason, so coverage names it.
+        reason = (
+            REFUSAL_EXTRACT_ONLY
+            if (has_extract or non_relational_only)
+            else REFUSAL_UNRECOGNIZED
+        )
+        return [SourceRelation(datasource=caption, kind="refused", refusal_reason=reason)]
     return emitted
+
+
+def _direct_relations(conn: etree._Element) -> list[etree._Element]:
+    """Direct-child relation elements of one connection.
+
+    Best-effort handling of Tableau object-model wrappers: a direct child
+    whose tag ends with "...relation" (the
+    `_.fcp.ObjectModelEncapsulateLegacy.true...relation` shape) counts as a
+    relation; when such a wrapper carries no relation type but holds
+    direct-child <relation> elements, we descend exactly one level and
+    treat those as the connection's relations."""
+    relations: list[etree._Element] = []
+    for child in conn:
+        tag = child.tag if isinstance(child.tag, str) else ""
+        if tag == "relation":
+            relations.append(child)
+            continue
+        if not tag.endswith("...relation"):
+            continue
+        if child.get("type") is None:
+            inner = [el for el in child if el.tag == "relation"]
+            if inner:
+                relations.extend(inner)
+                continue
+        relations.append(child)
+    return relations
 
 
 def _build_relation(
@@ -129,11 +161,38 @@ def _build_relation(
         conn = default_conn
     conn_class = conn.get("class") if conn is not None else None
 
+    # The resolved connection class gates eligibility before the relation
+    # shape does: extract-holding classes are refused as extract-only, any
+    # other non-Snowflake class is refused as unsupported (parity can only
+    # measure Snowflake). An unresolvable class (None) passes through so a
+    # missing named-connection never hides a relation.
+    if conn_class in _NON_RELATIONAL_CLASSES:
+        return SourceRelation(
+            datasource=datasource,
+            kind="refused",
+            refusal_reason=REFUSAL_EXTRACT_ONLY,
+            connection_class=conn_class,
+            has_extract=has_extract,
+        )
+    if conn_class is not None and conn_class != _SUPPORTED_CLASS:
+        return SourceRelation(
+            datasource=datasource,
+            kind="refused",
+            refusal_reason=f"unsupported-connection:{conn_class}",
+            connection_class=conn_class,
+            has_extract=has_extract,
+        )
+
     rel_type = rel.get("type", "")
     if rel_type == "table":
         parts = _table_parts(rel.get("table") or "")
+        database = conn.get("dbname") if conn is not None else None
         schema = conn.get("schema") if conn is not None else None
         table: str | None = rel.get("name")
+        if len(parts) >= 3:
+            # A fully qualified table attr ([DB].[SCH].[TBL]) names its own
+            # database, overriding the connection's dbname.
+            database = parts[-3]
         if len(parts) >= 2:
             schema, table = parts[-2], parts[-1]
         elif len(parts) == 1:
@@ -141,7 +200,7 @@ def _build_relation(
         return SourceRelation(
             datasource=datasource,
             kind="table",
-            database=conn.get("dbname") if conn is not None else None,
+            database=database,
             schema=schema,
             table=table,
             connection_class=conn_class,

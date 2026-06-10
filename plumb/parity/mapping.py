@@ -47,11 +47,14 @@ def _name_parts(name: str) -> tuple[str, ...]:
 
 
 class ParityDefaults(BaseModel):
-    """Map-wide defaults; per-object entries may override tolerance_pct."""
+    """Map-wide defaults; per-object entries may override tolerance_pct.
+
+    tolerance_pct is a FRACTION, not a percentage: 0.01 means 1% relative
+    drift. Values above 1.0 (100%) are rejected loudly."""
 
     model_config = ConfigDict(extra="forbid")
 
-    tolerance_pct: float = Field(default=0.01, ge=0.0)
+    tolerance_pct: float = Field(default=0.01, ge=0.0, le=1.0)
     identity_fallback: bool = True
 
 
@@ -61,7 +64,8 @@ class ObjectMapping(BaseModel):
     `old` is the name as the workbook references it: DB.SCHEMA.TABLE, or
     SCHEMA.TABLE when the connection supplies the database. `new` must be
     fully qualified. keys/grain/columns are stored upper-cased (Snowflake
-    canonical)."""
+    canonical). tolerance_pct is a FRACTION, not a percentage: 0.01 means
+    1% relative drift; values above 1.0 (100%) are rejected loudly."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -70,7 +74,7 @@ class ObjectMapping(BaseModel):
     keys: list[str] = Field(default_factory=list)
     grain: list[str] = Field(default_factory=list)
     columns: dict[str, str] = Field(default_factory=dict)
-    tolerance_pct: float | None = Field(default=None, ge=0.0)
+    tolerance_pct: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @field_validator("old")
     @classmethod
@@ -100,6 +104,7 @@ class ObjectMapping(BaseModel):
     @classmethod
     def _column_map_upper(cls, value: dict[str, str]) -> dict[str, str]:
         upper: dict[str, str] = {}
+        seen_new: set[str] = set()
         for old_name, new_name in value.items():
             old_upper = str(old_name).strip().upper()
             new_upper = new_name.strip().upper()
@@ -107,6 +112,9 @@ class ObjectMapping(BaseModel):
                 raise ValueError("column rename names must be non-empty")
             if old_upper in upper:
                 raise ValueError(f"duplicate column rename for {old_upper!r}")
+            if new_upper in seen_new:
+                raise ValueError(f"duplicate column rename target {new_upper!r}")
+            seen_new.add(new_upper)
             upper[old_upper] = new_upper
         return upper
 
@@ -165,10 +173,14 @@ def _matches(old: str, fqn: str) -> bool:
     Comparison is case-insensitive and explicit, never fuzzy: when both
     sides carry the same number of parts they must all match; when one
     side omits the database (2-part), the trailing SCHEMA.TABLE parts
-    must match the other side's tail."""
+    must match the other side's tail. Tail matching needs at least two
+    shared trailing parts — a bare 1-part name never tail-matches a
+    multi-part entry (TABLE alone is too ambiguous to map safely)."""
     old_parts = _name_parts(old)
     fqn_parts = _name_parts(fqn)
     depth = min(len(old_parts), len(fqn_parts))
+    if depth < 2:
+        return old_parts == fqn_parts
     return old_parts[-depth:] == fqn_parts[-depth:]
 
 
@@ -236,7 +248,10 @@ def resolve(relations: list[SourceRelation], parity_map: ParityMap) -> MappingRe
         if _is_ignored(fqn, parity_map.ignore):
             resolution.ignored.append(relation)
             continue
-        if defaults.identity_fallback:
+        # Identity requires a fully qualified (3-part) name: anything less
+        # cannot name the same object on both sides, so it is unmapped for
+        # M-MAP-001 to report rather than silently half-resolved.
+        if defaults.identity_fallback and len(_name_parts(fqn)) >= 3:
             resolution.resolved.append(
                 ResolvedObject(
                     relation=relation,

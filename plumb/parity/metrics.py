@@ -27,14 +27,15 @@ internal quotes doubled. SQL generation is deterministic: columns iterate
 in sorted reported-name order with positional aliases, so identical inputs
 produce byte-identical statements.
 
-Judgment call: a declared key or grain column missing from the discovered
-columns is omitted from the aggregate (keys) or skips the grain query
-entirely (grouping on a partial grain would change semantics) rather than
-failing the whole measurement — M-SCHEMA-001 names the missing column.
+A declared key or grain column missing from the discovered columns raises
+ParityMetricsError naming the column(s) and the object: silently omitting
+a declared key (or measuring a partial grain) would let a check pass while
+proving less than the map promised.
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Literal
 
 from plumb.parity.contracts import (
@@ -248,11 +249,16 @@ def measure(
         for physical, data_type in discovered.items()
     )
     available = set(discovered)
-    keys = [
-        (key, old_to_physical.get(key, key))
-        for key in sorted({key.upper() for key in resolved.keys})
-        if old_to_physical.get(key.upper(), key.upper()) in available
+    declared_keys = sorted({key.upper() for key in resolved.keys})
+    missing_keys = [
+        key for key in declared_keys if old_to_physical.get(key, key) not in available
     ]
+    if missing_keys:
+        raise ParityMetricsError(
+            f"declared key column(s) not found on {canonical_fqn}: "
+            f"{', '.join(missing_keys)}"
+        )
+    keys = [(key, old_to_physical.get(key, key)) for key in declared_keys]
 
     agg = aggregate_sql(quoted_fqn, columns, keys)
     rows = _execute(session, agg, canonical_fqn)
@@ -277,8 +283,18 @@ def measure(
 
     grain = tuple(name.upper() for name in resolved.grain)
     grain_physical = tuple(old_to_physical.get(name, name) for name in grain)
+    missing_grain = [
+        name
+        for name, physical in zip(grain, grain_physical, strict=True)
+        if physical not in available
+    ]
+    if missing_grain:
+        raise ParityMetricsError(
+            f"declared grain column(s) not found on {canonical_fqn}: "
+            f"{', '.join(missing_grain)}"
+        )
     grain_groups: list[GrainGroup] = []
-    if grain and all(physical in available for physical in grain_physical):
+    if grain:
         grain_rows = _execute(
             session, grain_sql(quoted_fqn, grain_physical, grain_top_n), canonical_fqn
         )
@@ -324,4 +340,22 @@ def _measure_custom_sql(session: Any, custom_sql: str) -> ParityMetrics:
 
 
 def _stringify(value: Any) -> str:
-    return NULL_GROUP_VALUE if value is None else str(value)
+    """Canonical grain-group value string, identical across drivers.
+
+    Numeric values (int / float / Decimal) stringify canonically so the
+    same warehouse value compares equal whatever Python type the driver
+    returned: integral values as their integer string ("5" for Decimal('5'),
+    5.0, and 5), non-integral values as repr(float(value)). NULL stays the
+    NULL_GROUP_VALUE sentinel; booleans and everything else keep str()."""
+    if value is None:
+        return NULL_GROUP_VALUE
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, (float, Decimal)):
+        as_float = float(value)
+        if as_float.is_integer():
+            return str(int(as_float))
+        return repr(as_float)
+    return str(value)

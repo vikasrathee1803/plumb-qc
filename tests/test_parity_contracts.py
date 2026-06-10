@@ -8,6 +8,8 @@ single workbook parser.
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from plumb.checks._tableau import TableauParseError, parse_workbook
@@ -117,6 +119,22 @@ class TestMetricsCodec:
             assert set(rec) == {"kind", "column", "value", "text"}
             assert rec["value"] is None or isinstance(rec["value"], float)
 
+    def test_first_record_is_the_codec_marker(self):
+        """QC F11: every snapshot leads with its codec version."""
+        first = self._metrics().to_records()[0]
+        assert first == {"kind": "codec", "column": None, "value": 1.0, "text": None}
+
+    def test_records_without_codec_rejected(self):
+        records = [r for r in self._metrics().to_records() if r["kind"] != "codec"]
+        with pytest.raises(ValueError, match="unsupported or missing parity snapshot codec"):
+            ParityMetrics.from_records(records)
+
+    def test_unknown_codec_version_rejected(self):
+        records = self._metrics().to_records()
+        records[0] = {"kind": "codec", "column": None, "value": 2.0, "text": None}
+        with pytest.raises(ValueError, match="unsupported or missing parity snapshot codec"):
+            ParityMetrics.from_records(records)
+
 
 class TestSnapshotNaming:
     def test_prefix_is_sanitized(self):
@@ -131,7 +149,10 @@ class TestSnapshotNaming:
             table="ORDERS",
         )
         name = snapshot_name("parity__wb", rel)
-        assert name == "parity__wb__orders-legacy__legacy_db-sales-orders"
+        expected_hash = hashlib.sha256(
+            "Orders (Legacy)|LEGACY_DB.SALES.ORDERS".encode("utf-8")
+        ).hexdigest()[:6]
+        assert name == f"parity__wb__orders-legacy__legacy_db-sales-orders__{expected_hash}"
         assert "/" not in name and "\\" not in name
 
     def test_custom_sql_names_are_stable(self):
@@ -140,6 +161,17 @@ class TestSnapshotNaming:
         c = SourceRelation(datasource="ds", kind="custom_sql", custom_sql="SELECT 2")
         assert snapshot_name("p", a) == snapshot_name("p", b)
         assert snapshot_name("p", a) != snapshot_name("p", c)
+
+    def test_sanitization_collisions_get_distinct_names(self):
+        """QC F10: labels that sanitize identically must not share a
+        snapshot name (a collision would silently overwrite)."""
+        a = SourceRelation(datasource="ds", kind="table", table="A.B")
+        b = SourceRelation(datasource="ds", kind="table", table="A-B")
+        name_a = snapshot_name("p", a)
+        name_b = snapshot_name("p", b)
+        # Same sanitized body, distinguished only by the trailing hash.
+        assert name_a.rsplit("__", 1)[0] == name_b.rsplit("__", 1)[0]
+        assert name_a != name_b
 
 
 class TestRelationFqn:

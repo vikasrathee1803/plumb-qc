@@ -110,8 +110,10 @@ class ParityMetrics:
 
     def to_records(self) -> list[dict[str, Any]]:
         """Flat records for the parquet baseline store. Schema is stable:
-        kind / column / value / text."""
+        kind / column / value / text. The first record is the codec version
+        marker; from_records refuses record sets without it."""
         records: list[dict[str, Any]] = [
+            {"kind": "codec", "column": None, "value": CODEC_VERSION, "text": None},
             {"kind": "object_fqn", "column": None, "value": None, "text": self.object_fqn},
             {"kind": "row_count", "column": None, "value": float(self.row_count), "text": None},
         ]
@@ -159,6 +161,13 @@ class ParityMetrics:
 
     @classmethod
     def from_records(cls, records: list[dict[str, Any]]) -> ParityMetrics:
+        """Rebuild metrics from stored records. Raises ValueError when the
+        codec marker is absent or names a version this build cannot read,
+        so a stale or foreign snapshot fails loudly instead of decoding to
+        silently-wrong metrics."""
+        codec = next((r.get("value") for r in records if r.get("kind") == "codec"), None)
+        if codec != CODEC_VERSION:
+            raise ValueError("unsupported or missing parity snapshot codec")
         metrics = cls(object_fqn="", row_count=0)
         for rec in records:
             kind = rec.get("kind")
@@ -196,6 +205,10 @@ class ParityMetrics:
 
 
 RECORD_COLUMNS = ["kind", "column", "value", "text"]
+
+# Snapshot record codec version. Bump on any incompatible record-shape
+# change; from_records refuses snapshots written by other versions.
+CODEC_VERSION = 1.0
 
 ParityMode = Literal["snapshot", "check"]
 ParitySide = Literal["legacy", "target"]
@@ -246,5 +259,10 @@ def snapshot_prefix_for(workbook_path: str) -> str:
 
 
 def snapshot_name(prefix: str, relation: SourceRelation) -> str:
-    """Flat, filesystem-safe baseline name for one relation's snapshot."""
-    return f"{prefix}__{_sanitize(relation.datasource)}__{_sanitize(relation.label)}"
+    """Flat, filesystem-safe baseline name for one relation's snapshot.
+
+    The trailing 6-char hash is derived from the unsanitized datasource and
+    label, so two relations whose names sanitize to the same text still get
+    distinct snapshot names (a collision would silently overwrite)."""
+    hash6 = _short_hash(f"{relation.datasource}|{relation.label}")[:6]
+    return f"{prefix}__{_sanitize(relation.datasource)}__{_sanitize(relation.label)}__{hash6}"

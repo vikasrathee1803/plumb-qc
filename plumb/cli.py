@@ -388,13 +388,20 @@ def _run_parity_phase(
     grain_top_n: int,
 ) -> None:
     from plumb.checks._tableau import TableauParseError as _ParseError
-    from plumb.parity.runner import run_parity
+    from plumb.parity.runner import build_bundle, run_parity
 
     if map_file is not None and not map_file.exists():
         raise _fail(f"map file not found: {map_file}")
 
     ruleset = _resolve_ruleset(rules, profile)
     run_id = str(uuid.uuid4())
+    # Pre-flight the local inputs before opening a session: a malformed
+    # workbook or map must never cost a connection (the second parse of a
+    # local XML inside run_parity is accepted).
+    try:
+        build_bundle(workbook, map_file, mode)  # type: ignore[arg-type]
+    except (_ParseError, ConfigError) as exc:
+        raise _fail(str(exc)) from exc
     session = None if static_only else _open_session(ruleset, run_id, connection)
     try:
         result = run_parity(
@@ -408,7 +415,7 @@ def _run_parity_phase(
             run_id=run_id,
             grain_top_n=grain_top_n,
         )
-    except (_ParseError, ConfigError) as exc:
+    except (_ParseError, ConfigError, ValueError) as exc:
         raise _fail(str(exc)) from exc
     finally:
         if session is not None:

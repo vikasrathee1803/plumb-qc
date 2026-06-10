@@ -10,6 +10,7 @@ talks to the interface.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -108,6 +109,10 @@ class LocalParquetStore:
         return self._manifest_path(name).exists() and self._parquet_path(name).exists()
 
     def save(self, baseline: Baseline) -> None:
+        """Crash-safe save: both files are fully written to temp siblings
+        first, then moved into place with os.replace, so a failure mid-save
+        leaves either the previous intact pair or nothing loadable — never
+        a half-written file."""
         self.root.mkdir(parents=True, exist_ok=True)
         if baseline.columns:
             table = pa.Table.from_pylist(
@@ -115,10 +120,16 @@ class LocalParquetStore:
             )
         else:
             table = pa.table({})
-        pq.write_table(table, self._parquet_path(baseline.name))
-        self._manifest_path(baseline.name).write_text(
+        parquet_path = self._parquet_path(baseline.name)
+        manifest_path = self._manifest_path(baseline.name)
+        tmp_parquet = parquet_path.with_name(parquet_path.name + ".tmp")
+        tmp_manifest = manifest_path.with_name(manifest_path.name + ".tmp")
+        pq.write_table(table, tmp_parquet)
+        tmp_manifest.write_text(
             json.dumps(baseline.manifest(), indent=2, default=str), encoding="utf-8"
         )
+        os.replace(tmp_parquet, parquet_path)
+        os.replace(tmp_manifest, manifest_path)
 
     def load(self, name: str) -> Baseline | None:
         if not self.exists(name):

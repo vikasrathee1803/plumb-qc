@@ -68,6 +68,45 @@ class TestSnapshotCommand:
         assert result.exit_code == 3
         assert "Traceback" not in result.output
 
+    def test_malformed_workbook_never_opens_a_session(self, patched, monkeypatch):
+        """QC F16: inputs are pre-flighted before any session opens; a bad
+        workbook must never cost a connection."""
+        _store, _session, tmp_path = patched
+        calls: list[object] = []
+
+        def counting_open(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("session must not be opened for a malformed workbook")
+
+        monkeypatch.setattr(cli, "_open_session", counting_open)
+        wb = write_twb(tmp_path, TWB_MALFORMED, "bad.twb")
+        result = _snapshot(wb)
+        assert result.exit_code == 3
+        assert calls == []
+
+    def test_bad_map_content_never_opens_a_session(self, patched, monkeypatch):
+        _store, _session, tmp_path = patched
+        calls: list[object] = []
+
+        def counting_open(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("session must not be opened for a bad map")
+
+        monkeypatch.setattr(cli, "_open_session", counting_open)
+        wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
+        bad_map = tmp_path / "map.yml"
+        bad_map.write_text("version: 1\nnonsense_key: true\n", encoding="utf-8")
+        result = runner.invoke(
+            cli.app,
+            [
+                "parity", "snapshot", "--workbook", str(wb),
+                "--map", str(bad_map), "--rules", RULES,
+            ],
+        )
+        assert result.exit_code == 3
+        assert calls == []
+        assert "Traceback" not in result.output
+
     def test_missing_map_file_is_clean_exit_3(self, patched):
         _store, _session, tmp_path = patched
         wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
@@ -101,6 +140,22 @@ class TestCheckCommand:
             cli.app, ["parity", "check", "--workbook", str(wb), "--rules", RULES]
         )
         assert result.exit_code == 2
+        assert "BLOCKED" in result.output
+
+    def test_corrupt_snapshot_is_loud_and_traceback_free(self, patched):
+        """QC F8: a truncated snapshot parquet must surface as a named
+        M-SNAP-001 failure (exit 2, BLOCKED), never a traceback."""
+        _store, _session, tmp_path = patched
+        wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
+        assert _snapshot(wb).exit_code == 0
+        parquet_files = list((tmp_path / "store").glob("*.parquet"))
+        assert len(parquet_files) == 1
+        parquet_files[0].write_bytes(b"truncated")
+        result = runner.invoke(
+            cli.app, ["parity", "check", "--workbook", str(wb), "--rules", RULES]
+        )
+        assert result.exit_code == 2
+        assert "Traceback" not in result.output
         assert "BLOCKED" in result.output
 
     def test_check_without_snapshot_exits_blocked(self, patched):
