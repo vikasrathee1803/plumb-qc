@@ -1,0 +1,13 @@
+version: 1
+defaults:
+  tolerance_pct: 0.0
+objects:
+  - old: PORTFOLIO_DEMO_DB.ANALYTICS.V_ORDER_ANALYTICS
+    new: PORTFOLIO_DEMO_DB.ANALYTICS.V_ORDER_ANALYTICS
+    grain: [CUSTOMER_REGION, CUSTOMER_SEGMENT]
+    tolerance_pct: 0.0
+  - old: PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV
+    new: PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV
+    keys: [CUSTOMER_ID]
+    grain: [REGION]
+    tolerance_pct: 0.0

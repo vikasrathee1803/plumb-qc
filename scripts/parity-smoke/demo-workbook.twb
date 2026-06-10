@@ -1,0 +1,60 @@
+<?xml version='1.0' encoding='utf-8' ?>
+
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='Order Analytics' name='federated.0aaa111' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='uy47412.canada-central.azure.snowflakecomputing.com' name='snowflake.1bbb222'>
+            <connection class='snowflake' dbname='PORTFOLIO_DEMO_DB' schema='ANALYTICS'
+              server='uy47412.canada-central.azure.snowflakecomputing.com' warehouse='PLUMB_WH' />
+          </named-connection>
+        </named-connections>
+        <relation connection='snowflake.1bbb222' name='V_ORDER_ANALYTICS'
+          table='[ANALYTICS].[V_ORDER_ANALYTICS]' type='table' />
+      </connection>
+      <column caption='Customer Region' datatype='string' name='[CUSTOMER_REGION]' role='dimension' />
+      <column caption='Customer Segment' datatype='string' name='[CUSTOMER_SEGMENT]' role='dimension' />
+      <column caption='Order Month' datatype='date' name='[ORDER_MONTH]' role='dimension' />
+      <column caption='Total Revenue' datatype='real' name='[TOTAL_REVENUE]' role='measure' />
+      <column caption='Order Count' datatype='integer' name='[ORDER_COUNT]' role='measure' />
+    </datasource>
+    <datasource caption='Customer LTV' name='federated.2ccc333' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='uy47412.canada-central.azure.snowflakecomputing.com' name='snowflake.3ddd444'>
+            <connection class='snowflake' dbname='PORTFOLIO_DEMO_DB' schema='ANALYTICS'
+              server='uy47412.canada-central.azure.snowflakecomputing.com' warehouse='PLUMB_WH' />
+          </named-connection>
+        </named-connections>
+        <relation connection='snowflake.3ddd444' name='V_CUSTOMER_LTV'
+          table='[ANALYTICS].[V_CUSTOMER_LTV]' type='table' />
+      </connection>
+      <column caption='Customer ID' datatype='string' name='[CUSTOMER_ID]' role='dimension' />
+      <column caption='Customer Name' datatype='string' name='[CUSTOMER_NAME]' role='dimension' />
+      <column caption='Segment' datatype='string' name='[SEGMENT]' role='dimension' />
+      <column caption='Lifetime Revenue' datatype='real' name='[LIFETIME_REVENUE]' role='measure' />
+      <column caption='Total Orders' datatype='integer' name='[TOTAL_ORDERS]' role='measure' />
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Revenue by Region'>
+      <table>
+        <view>
+          <datasource-dependencies datasource='federated.0aaa111'>
+            <column datatype='real' name='[TOTAL_REVENUE]' role='measure' />
+          </datasource-dependencies>
+        </view>
+      </table>
+    </worksheet>
+    <worksheet name='Customer LTV Overview'>
+      <table>
+        <view>
+          <datasource-dependencies datasource='federated.2ccc333'>
+            <column datatype='real' name='[LIFETIME_REVENUE]' role='measure' />
+          </datasource-dependencies>
+        </view>
+      </table>
+    </worksheet>
+  </worksheets>
+</workbook>
