@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
@@ -75,6 +75,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_RULES = REPO_ROOT / "rules" / "plumb.yml"
 PROFILES_DIR = REPO_ROOT / "rules" / "profiles"
 SPA_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
+# The migration demo: the same assets the CLI smoke uses, served read-only
+# so the Migration tab can load them with one click.
+PARITY_DEMO_DIR = REPO_ROOT / "scripts" / "parity-smoke"
+PARITY_DEMO_WORKBOOK = PARITY_DEMO_DIR / "demo-workbook.twb"
+PARITY_DEMO_MAPS = {
+    "identity": PARITY_DEMO_DIR / "identity-map.yml",
+    "drift": PARITY_DEMO_DIR / "drift-map.yml",
+}
 
 # Process-local app logger. A child of "uvicorn" so it inherits uvicorn's
 # handlers and formatting when run normally, and still works (via lastResort)
@@ -832,6 +840,116 @@ def create_app() -> FastAPI:
         )
         _record(result)
         return result.model_dump(mode="json")
+
+    @app.get("/api/parity/demo")
+    def parity_demo() -> dict[str, Any]:
+        """Whether the bundled migration demo assets exist, so the UI only
+        offers the demo when this checkout actually carries it."""
+        return {
+            "available": PARITY_DEMO_WORKBOOK.exists(),
+            "workbook": PARITY_DEMO_WORKBOOK.name,
+            "maps": [k for k, p in PARITY_DEMO_MAPS.items() if p.exists()],
+        }
+
+    @app.get("/api/parity/demo/workbook")
+    def parity_demo_workbook() -> FileResponse:
+        if not PARITY_DEMO_WORKBOOK.exists():
+            raise HTTPException(status_code=404, detail="demo workbook not present")
+        return FileResponse(PARITY_DEMO_WORKBOOK, filename=PARITY_DEMO_WORKBOOK.name)
+
+    @app.get("/api/parity/demo/map")
+    def parity_demo_map(kind: str = "identity") -> FileResponse:
+        path = PARITY_DEMO_MAPS.get(kind)
+        if path is None:
+            raise HTTPException(status_code=400, detail=f"unknown demo map {kind!r}")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="demo map not present")
+        return FileResponse(path, filename=path.name)
+
+    @app.post("/api/parity/sources")
+    async def parity_sources(workbook: UploadFile = File(...)) -> dict[str, Any]:
+        """The workbook's Snowflake relations, for the map builder: one row
+        per provable table source (pre-filled identity), plus the custom-SQL
+        and refused relations so the builder can say honestly what a map can
+        and cannot cover."""
+        from plumb.parity.sources import extract_relations
+
+        suffix = Path(workbook.filename or "wb.twb").suffix or ".twb"
+        size = 0
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            while True:
+                chunk = await workbook.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    break
+                tmp.write(chunk)
+        try:
+            if size > _MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"upload exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+                )
+            try:
+                relations = extract_relations(tmp_path)
+            except TableauParseError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        return {
+            "relations": [
+                {
+                    "datasource": r.datasource,
+                    "kind": r.kind,
+                    "fqn": r.fqn,
+                    "label": r.label,
+                    "refusal_reason": r.refusal_reason,
+                }
+                for r in relations
+            ]
+        }
+
+    @app.post("/api/parity/map/build")
+    def parity_map_build(payload: dict[str, Any]) -> dict[str, Any]:
+        """Validate a map authored in the UI through the REAL ParityMap model
+        (single source of truth — the same loud rules `plumb parity` applies
+        at load) and return it as clean galaxy-map.yml text."""
+        import yaml
+
+        from plumb.parity.mapping import ParityMap
+
+        try:
+            parity_map = ParityMap.model_validate(payload)
+        except ValidationError as exc:
+            lines = [
+                f"{'.'.join(str(p) for p in e.get('loc', ())) or 'map'}: {e.get('msg', 'invalid')}"
+                for e in exc.errors()[:6]
+            ]
+            raise HTTPException(status_code=400, detail="; ".join(lines)) from exc
+        data = parity_map.model_dump()
+        objects = []
+        for entry in data["objects"]:
+            cleaned: dict[str, Any] = {"old": entry["old"], "new": entry["new"]}
+            if entry["keys"]:
+                cleaned["keys"] = entry["keys"]
+            if entry["grain"]:
+                cleaned["grain"] = entry["grain"]
+            if entry["columns"]:
+                cleaned["columns"] = entry["columns"]
+            if entry["tolerance_pct"] is not None:
+                cleaned["tolerance_pct"] = entry["tolerance_pct"]
+            objects.append(cleaned)
+        doc: dict[str, Any] = {
+            "version": 1,
+            "defaults": data["defaults"],
+            "objects": objects,
+        }
+        if data["ignore"]:
+            doc["ignore"] = data["ignore"]
+        text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+        return {"yaml": text}
 
     @app.post("/api/parity/run")
     async def parity_run(

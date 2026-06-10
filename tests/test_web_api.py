@@ -629,3 +629,76 @@ def test_parity_run_lands_in_history(tmp_path):
     )
     runs = client.get("/api/history").json()["runs"]
     assert any(run["type"] == "parity" for run in runs)
+
+
+# --- migration demo + map builder ------------------------------------------
+
+
+def test_parity_demo_assets_served():
+    info = client.get("/api/parity/demo").json()
+    assert info["available"] is True
+    assert "identity" in info["maps"] and "drift" in info["maps"]
+    wb = client.get("/api/parity/demo/workbook")
+    assert wb.status_code == 200
+    assert b"PORTFOLIO_DEMO_DB" in wb.content
+    mp = client.get("/api/parity/demo/map", params={"kind": "drift"})
+    assert mp.status_code == 200
+    assert b"V_PRODUCT_MARGIN" in mp.content
+    assert client.get("/api/parity/demo/map", params={"kind": "nope"}).status_code == 400
+
+
+def test_parity_sources_lists_relations(tmp_path):
+    r = client.post("/api/parity/sources", files=_parity_files(tmp_path))
+    assert r.status_code == 200
+    relations = r.json()["relations"]
+    assert any(rel["kind"] == "custom_sql" for rel in relations)
+
+
+def test_parity_sources_bad_workbook_is_400():
+    r = client.post(
+        "/api/parity/sources",
+        files={"workbook": ("bad.twb", b"<workbook", "application/octet-stream")},
+    )
+    assert r.status_code == 400
+
+
+def test_map_build_returns_clean_yaml():
+    payload = {
+        "version": 1,
+        "defaults": {"tolerance_pct": 0.0, "identity_fallback": True},
+        "objects": [
+            {
+                "old": "LEGACY_DB.SALES.ORDERS",
+                "new": "GALAXY.PRES.FCT_ORDERS",
+                "keys": ["ORDER_ID"],
+                "grain": [],
+                "columns": {"REGION": "SALES_REGION"},
+            }
+        ],
+        "ignore": [],
+    }
+    r = client.post("/api/parity/map/build", json=payload)
+    assert r.status_code == 200, r.text
+    text = r.json()["yaml"]
+    assert "version: 1" in text
+    assert "LEGACY_DB.SALES.ORDERS" in text
+    assert "SALES_REGION" in text
+    # Empty lists are pruned: no noise keys in the generated file.
+    assert "grain" not in text and "ignore" not in text
+    # The generated YAML round-trips through the real loader.
+    import yaml as _yaml
+
+    from plumb.parity.mapping import ParityMap
+
+    ParityMap.model_validate(_yaml.safe_load(text))
+
+
+def test_map_build_validates_through_the_real_model():
+    payload = {
+        "version": 1,
+        "objects": [{"old": "ORDERS", "new": "NOT_QUALIFIED"}],
+    }
+    r = client.post("/api/parity/map/build", json=payload)
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "old" in detail or "new" in detail

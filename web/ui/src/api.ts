@@ -113,6 +113,45 @@ export interface ParityRunResponse {
   stopped_after_snapshot: boolean;
 }
 
+export interface ParityDemoInfo {
+  available: boolean;
+  workbook: string;
+  maps: string[];
+}
+
+export const fetchParityDemo = () => getJSON<ParityDemoInfo>("/api/parity/demo");
+
+// Demo assets arrive as real File objects so the demo drives the exact
+// same inputs and code path a user's own upload would.
+export async function fetchDemoFile(url: string, name: string): Promise<File> {
+  const r = await fetch(url);
+  if (r.status === 401) handleAuthExpired();
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  sessionStorage.removeItem(RELOAD_FLAG);
+  return new File([await r.blob()], name);
+}
+
+export interface WorkbookRelation {
+  datasource: string;
+  kind: string;
+  fqn: string | null;
+  label: string;
+  refusal_reason: string | null;
+}
+
+export async function fetchWorkbookSources(file: File): Promise<WorkbookRelation[]> {
+  const form = new FormData();
+  form.append("workbook", file);
+  const r = await fetch("/api/parity/sources", { method: "POST", body: form });
+  if (r.status === 401) handleAuthExpired();
+  const j = await r.json().catch(() => ({}) as { detail?: string });
+  if (!r.ok) throw new Error((j as { detail?: string }).detail ?? "could not read the workbook");
+  return (j as { relations: WorkbookRelation[] }).relations;
+}
+
+export const buildParityMap = (payload: unknown) =>
+  sendJSON<{ yaml: string }>("/api/parity/map/build", "POST", payload).then((d) => d.yaml);
+
 export async function runParity(
   file: File,
   map: File | null,
