@@ -36,6 +36,34 @@
       <column caption='Lifetime Revenue' datatype='real' name='[LIFETIME_REVENUE]' role='measure' />
       <column caption='Total Orders' datatype='integer' name='[TOTAL_ORDERS]' role='measure' />
     </datasource>
+    <datasource caption='Supplier Performance' name='federated.4eee111' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='uy47412.canada-central.azure.snowflakecomputing.com' name='snowflake.5fff222'>
+            <connection class='snowflake' dbname='PORTFOLIO_DEMO_DB' schema='ANALYTICS'
+              server='uy47412.canada-central.azure.snowflakecomputing.com' warehouse='PLUMB_WH' />
+          </named-connection>
+        </named-connections>
+        <relation connection='snowflake.5fff222' name='V_SUPPLIER_PERFORMANCE'
+          table='[ANALYTICS].[V_SUPPLIER_PERFORMANCE]' type='table' />
+      </connection>
+      <column caption='Supplier Region' datatype='string' name='[SUPPLIER_REGION]' role='dimension' />
+      <column caption='Late Delivery Pct' datatype='real' name='[LATE_DELIVERY_PCT]' role='measure' />
+    </datasource>
+    <datasource caption='Product Margin' name='federated.6ggg333' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='uy47412.canada-central.azure.snowflakecomputing.com' name='snowflake.7hhh444'>
+            <connection class='snowflake' dbname='PORTFOLIO_DEMO_DB' schema='ANALYTICS'
+              server='uy47412.canada-central.azure.snowflakecomputing.com' warehouse='PLUMB_WH' />
+          </named-connection>
+        </named-connections>
+        <relation connection='snowflake.7hhh444' name='V_PRODUCT_MARGIN'
+          table='[ANALYTICS].[V_PRODUCT_MARGIN]' type='table' />
+      </connection>
+      <column caption='Supplier Nation' datatype='string' name='[SUPPLIER_NATION]' role='dimension' />
+      <column caption='Gross Margin' datatype='real' name='[GROSS_MARGIN]' role='measure' />
+    </datasource>
   </datasources>
   <worksheets>
     <worksheet name='Revenue by Region'>

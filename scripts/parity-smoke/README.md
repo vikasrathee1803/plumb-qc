@@ -7,7 +7,7 @@ of the Migration Parity Validator (PARITY-PLAN.md §E6.2).
 
 | File | Purpose |
 |---|---|
-| `demo-workbook.twb` | Federated Tableau workbook with two Snowflake relations: `ANALYTICS.V_ORDER_ANALYTICS` and `ANALYTICS.V_CUSTOMER_LTV` in `PORTFOLIO_DEMO_DB`. Shape modelled on `tests/_parity_fixtures.py` TWB_TWO_TABLES. |
+| `demo-workbook.twb` | Federated Tableau workbook with FOUR Snowflake relations in `PORTFOLIO_DEMO_DB.ANALYTICS`: `V_ORDER_ANALYTICS`, `V_CUSTOMER_LTV`, `V_SUPPLIER_PERFORMANCE`, `V_PRODUCT_MARGIN` (updated 2026-06-10; the last two resolve via identity fallback in both maps). Shape modelled on `tests/_parity_fixtures.py` TWB_TWO_TABLES. |
 | `identity-map.yml` | Parity map v1: each view maps to itself (old == new, 3-part FQNs). V_CUSTOMER_LTV has `keys: [CUSTOMER_ID]` and `grain: [REGION]`; V_ORDER_ANALYTICS has `grain: [CUSTOMER_REGION, CUSTOMER_SEGMENT]`. `tolerance_pct: 0.0` throughout. |
 | `drift-map.yml` | Parity map v1: V_ORDER_ANALYTICS is deliberately mapped to `V_PRODUCT_MARGIN` (schema-drift demo — different shape). V_CUSTOMER_LTV stays identity. `tolerance_pct: 0.0` throughout. |
 | `cloud/Superstore.twbx` | Tableau Superstore sample workbook downloaded from Tableau Cloud (no Snowflake relations — tests the refused-datasource path). |
@@ -54,14 +54,17 @@ Expected: exit 2, verdict BLOCKED. M-SCHEMA-001 FAIL naming `V_PRODUCT_MARGIN`
 as missing V_ORDER_ANALYTICS's columns. V_CUSTOMER_LTV side still passes all
 checks (identity mapping is still correct).
 
-## Expected outcomes (verified live 2026-06-09)
+## Expected outcomes (re-verified live 2026-06-10, four-source workbook)
 
 | Phase | Exit | Verdict | Notable checks |
 |---|---|---|---|
-| A snapshot | 0 | READY | M-SNAP-001 PASS "2 snapshot(s) written" |
-| B identity check | 0 | READY | All 9 M-* PASS (39 aggregates, 23 null cols, 1 distinct key, grain matched) |
-| C drift check | 2 | BLOCKED | M-SCHEMA-001 FAIL (V_PRODUCT_MARGIN missing 9 columns); M-ROW-001 FAIL (+7895% row delta); M-AGG-001 FAIL (3 aggregate breaches); V_CUSTOMER_LTV side PASS |
+| A snapshot | 0 | READY | M-SNAP-001 PASS "4 snapshot(s) written" |
+| B identity check | 0 | READY | All 10 M-* PASS (87 aggregates across 4 objects; M-HASH-001 1000-key capped window on V_CUSTOMER_LTV) |
+| C drift check | 2 | BLOCKED | M-SCHEMA-001 / M-ROW-001 / M-AGG-001 FAIL on the V_ORDER_ANALYTICS→V_PRODUCT_MARGIN mis-mapping; the three healthy sources still PASS |
 | D cloud static | 1 | REVIEW | M-SRC-001 FAIL "0 parity-eligible relations" (Superstore uses Excel/text/extract — correct refusal); no traceback |
+
+The same three acts run in the browser: `plumb web` → Migration tab →
+"Try the demo" (buttons fetch these exact assets via /api/parity/demo).
 
 Snapshots are stored under `~/.plumb/baselines/` as parquet + manifest pairs.
 The warehouse is read-only by design; no writes reach Snowflake beyond SELECT.

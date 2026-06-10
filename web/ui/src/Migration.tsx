@@ -73,10 +73,15 @@ export function MigrationView({ conn }: { conn: Connection }) {
         <div className="panel" style={{ marginBottom: 14 }}>
           <div className="dgroup-label" style={{ marginTop: 0 }}>Try the demo (2 minutes)</div>
           <div className="note" style={{ marginTop: 4 }}>
+            A four-source workbook over the demo warehouse, live.{" "}
             <b>1.</b> Load the demo, run <b>Snapshot</b> — the legacy numbers are saved.{" "}
-            <b>2.</b> Switch to <b>Check</b>, run — parity proven (READY).{" "}
-            <b>3.</b> Load the drift map, run Check — a wrong mapping is caught (BLOCKED),
-            with the drifted objects named. Runs live against the demo warehouse.
+            <b>2.</b> Switch to <b>Check</b>, run — parity proven (READY: row counts,
+            aggregates, nulls, distinct keys, grain, and per-row fingerprints).{" "}
+            <b>3.</b> Load the drift map, run Check — one source is silently re-pointed
+            at the wrong view and the check goes <b>BLOCKED</b>, naming exactly what
+            drifted while the healthy sources still pass.{" "}
+            <b>4.</b> Ready for your own workbook? Upload it and use{" "}
+            <b>Build one from the workbook</b> to author the map without writing YAML.
           </div>
           <div className="toolbtns" style={{ marginTop: 8 }}>
             <button className="ghost" onClick={() => loadDemo("identity")}>Load the demo</button>
