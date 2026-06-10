@@ -1,0 +1,9 @@
+# v2 estate smoke: the demo wave is two workbooks — the two-view federated
+# demo and a custom-SQL variant (exercises the SYSTEM$TYPEOF probe live).
+# Paths resolve relative to this file.
+version: 1
+workbooks:
+  - path: demo-workbook.twb
+    map: identity-map.yml
+  - path: demo-custom-sql.twb
+    map: identity-map.yml

@@ -1,0 +1,32 @@
+<?xml version='1.0' encoding='utf-8' ?>
+
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='LTV Custom SQL' name='federated.4eee555' version='18.1'>
+      <connection class='federated'>
+        <named-connections>
+          <named-connection caption='uy47412.canada-central.azure.snowflakecomputing.com' name='snowflake.5fff666'>
+            <connection class='snowflake' dbname='PORTFOLIO_DEMO_DB' schema='ANALYTICS'
+              server='uy47412.canada-central.azure.snowflakecomputing.com' warehouse='PLUMB_WH' />
+          </named-connection>
+        </named-connections>
+        <relation connection='snowflake.5fff666' name='Custom SQL Query'
+          type='text'>SELECT CUSTOMER_ID, SEGMENT, LIFETIME_REVENUE, TOTAL_ORDERS
+FROM PORTFOLIO_DEMO_DB.ANALYTICS.V_CUSTOMER_LTV</relation>
+      </connection>
+      <column caption='Customer ID' datatype='string' name='[CUSTOMER_ID]' role='dimension' />
+      <column caption='Lifetime Revenue' datatype='real' name='[LIFETIME_REVENUE]' role='measure' />
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='LTV from Custom SQL'>
+      <table>
+        <view>
+          <datasource-dependencies datasource='federated.4eee555'>
+            <column datatype='real' name='[LIFETIME_REVENUE]' role='measure' />
+          </datasource-dependencies>
+        </view>
+      </table>
+    </worksheet>
+  </worksheets>
+</workbook>

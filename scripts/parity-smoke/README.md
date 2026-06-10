@@ -65,3 +65,17 @@ checks (identity mapping is still correct).
 
 Snapshots are stored under `~/.plumb/baselines/` as parquet + manifest pairs.
 The warehouse is read-only by design; no writes reach Snowflake beyond SELECT.
+
+## v2 smoke (estate, post-swap, custom-SQL columns) — verified live 2026-06-10
+
+| File | Purpose |
+|---|---|
+| `estate-manifest.yml` | 2-workbook wave: the demo workbook + a custom-SQL variant. |
+| `demo-custom-sql.twb` | Custom-SQL relation over V_CUSTOMER_LTV — exercises the SYSTEM$TYPEOF probe and custom-SQL column metrics (E9) live. |
+
+| Phase | Command | Exit | Verdict |
+|---|---|---|---|
+| Estate both-live | `plumb parity estate --manifest scripts/parity-smoke/estate-manifest.yml --phase run` | 0 | READY (both workbooks READY in both sweeps; one session per sweep) |
+| Custom-SQL columns | `plumb parity check --workbook scripts/parity-smoke/demo-custom-sql.twb --map scripts/parity-smoke/identity-map.yml` | 0 | READY — M-AGG-001 "9 aggregate(s) ... 1 object(s) with column metrics", M-NULL-001 4 columns (probe live-verified, not a row-count fallback) |
+| Post-swap | `plumb parity check --workbook scripts/parity-smoke/demo-workbook.twb --map scripts/parity-smoke/identity-map.yml --post-swap` | 0 | READY — all 9 M-* PASS via the inverted-map resolution path |
+| Estate drift | `plumb parity estate --manifest "scripts/parity-smoke/demo-workbook.twb" --map scripts/parity-smoke/drift-map.yml --phase check` | 2 | BLOCKED — M-ESTATE-001 FAIL naming the workbook |
