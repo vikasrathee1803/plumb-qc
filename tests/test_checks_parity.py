@@ -779,3 +779,307 @@ class TestMGrain001:
         assert ORDERS_TARGET in res.observed
         assert "snapshot" in res.remediation
         assert "map" in res.remediation
+
+
+# --- estate roll-up checks (PARITY-PLAN-V2 E7, S7.2) ----------------------
+
+
+def run_result_with(verdict):
+    from plumb.engine.models import Coverage, RunResult, Summary, utc_now
+
+    return RunResult(
+        run_id="t",
+        timestamp=utc_now(),
+        target=Target(type="parity", name="wb"),
+        ruleset_version="1",
+        verdict=verdict,
+        coverage=Coverage(),
+        summary=Summary(),
+    )
+
+
+def estate_entry(verdict=None, error=None, path="wb.twbx"):
+    from plumb.parity.contracts import WorkbookParity
+
+    return WorkbookParity(
+        workbook_path=path,
+        check_result=run_result_with(verdict) if verdict is not None else None,
+        error=error,
+    )
+
+
+def estate_ctx(entries):
+    from plumb.parity.contracts import ESTATE_EXTRAS_KEY, EstateResult
+
+    estate = EstateResult(phase="check", entries=entries)
+    return CheckContext(
+        run_id="t",
+        target=Target(type="parity", name="estate"),
+        ruleset=Ruleset(version="1"),
+        extras={ESTATE_EXTRAS_KEY: estate},
+    )
+
+
+class TestEstateChecks:
+    def test_registration_and_catalog(self):
+        import plumb.checks  # noqa: F401 - registration side effects
+        from plumb.engine.models import CheckFamily, ExecutionType, Severity
+
+        for check_id in ("M-ESTATE-001", "M-ESTATE-002"):
+            definition = registry.get_check(check_id)
+            assert definition.family is CheckFamily.MIGRATION_PARITY
+            assert definition.execution_type is ExecutionType.STATIC
+        assert registry.get_check("M-ESTATE-001").default_severity is Severity.BLOCKER
+        assert registry.get_check("M-ESTATE-002").default_severity is Severity.HIGH
+
+    @pytest.mark.parametrize("fn", ["m_estate_001", "m_estate_002"])
+    def test_outside_estate_runs_skips(self, fn):
+        import plumb.checks.parity as checks
+
+        res = getattr(checks, fn)(ctx_for(extras={}), {})
+        assert res.status is Status.SKIP
+        assert "no estate result" in res.observed
+        res = getattr(checks, fn)(
+            ctx_for(extras={"parity_estate": "not an estate"}), {}
+        )
+        assert res.status is Status.SKIP
+
+    def test_estate_checks_skip_in_plain_parity_runs(self):
+        """A single-workbook parity run carries a ParityBundle, not an
+        EstateResult: the estate checks must stay out of its verdict."""
+        from plumb.checks.parity import m_estate_001, m_estate_002
+
+        bundle_ctx = ctx_for(make_bundle())
+        assert m_estate_001(bundle_ctx, {}).status is Status.SKIP
+        assert m_estate_002(bundle_ctx, {}).status is Status.SKIP
+
+    def test_empty_estate_warns_never_passes(self):
+        from plumb.checks.parity import m_estate_001, m_estate_002
+
+        ctx = estate_ctx([])
+        res1 = m_estate_001(ctx, {})
+        assert res1.status is Status.WARN
+        assert "empty estate" in res1.observed
+        res2 = m_estate_002(ctx, {})
+        assert res2.status is Status.SKIP
+
+    def test_all_ready_both_pass(self):
+        from plumb.checks.parity import m_estate_001, m_estate_002
+        from plumb.engine.models import Verdict
+
+        ctx = estate_ctx(
+            [estate_entry(Verdict.READY, path=f"wb{i}.twbx") for i in range(3)]
+        )
+        assert m_estate_001(ctx, {}).status is Status.PASS
+        assert m_estate_002(ctx, {}).status is Status.PASS
+
+    def test_blocked_workbook_fails_001_named(self):
+        from plumb.checks.parity import m_estate_001, m_estate_002
+        from plumb.engine.models import Verdict
+
+        ctx = estate_ctx(
+            [
+                estate_entry(Verdict.READY, path="ok.twbx"),
+                estate_entry(Verdict.BLOCKED, path="bad.twbx"),
+            ]
+        )
+        res = m_estate_001(ctx, {})
+        assert res.status is Status.FAIL
+        assert "bad.twbx" in res.observed
+        assert "1 of 2" in res.observed
+        # BLOCKED is 001's finding; 002 owns only the review tier.
+        assert m_estate_002(ctx, {}).status is Status.PASS
+
+    def test_errored_workbook_fails_001_with_cause(self):
+        from plumb.checks.parity import m_estate_001
+
+        ctx = estate_ctx(
+            [
+                estate_entry(error="unreadable workbook: boom", path="dead.twbx"),
+                estate_entry(verdict=None, error=None, path="silent.twbx"),
+            ]
+        )
+        res = m_estate_001(ctx, {})
+        assert res.status is Status.FAIL
+        assert "dead.twbx" in res.observed
+        assert "unreadable workbook: boom" in res.observed
+        assert "silent.twbx" in res.observed  # no result and no error: never a pass
+
+    def test_review_workbook_fails_002_named(self):
+        from plumb.checks.parity import m_estate_001, m_estate_002
+        from plumb.engine.models import Verdict
+
+        ctx = estate_ctx(
+            [
+                estate_entry(Verdict.READY, path="ok.twbx"),
+                estate_entry(Verdict.REVIEW, path="drifty.twbx"),
+            ]
+        )
+        assert m_estate_001(ctx, {}).status is Status.PASS
+        res = m_estate_002(ctx, {})
+        assert res.status is Status.FAIL
+        assert "drifty.twbx" in res.observed
+
+    def test_notes_workbook_warns_002(self):
+        from plumb.checks.parity import m_estate_002
+        from plumb.engine.models import Verdict
+
+        ctx = estate_ctx([estate_entry(Verdict.READY_WITH_NOTES, path="noted.twbx")])
+        res = m_estate_002(ctx, {})
+        assert res.status is Status.WARN
+        assert "noted.twbx" in res.observed
+
+    @pytest.mark.parametrize(
+        "verdicts,error_count",
+        [
+            (["READY"], 0),
+            (["READY", "READY_WITH_NOTES"], 0),
+            (["READY", "REVIEW"], 0),
+            (["READY", "BLOCKED"], 0),
+            (["READY"], 1),
+            (["REVIEW", "READY_WITH_NOTES", "BLOCKED"], 1),
+        ],
+    )
+    def test_engine_verdict_equals_d17_rollup(self, verdicts, error_count):
+        """The design invariant (plan amendment): running M-ESTATE-001/002
+        through compute_verdict reproduces EstateResult.compute_rollup()
+        exactly, so the engine stays the only verdict logic."""
+        from plumb.checks.parity import m_estate_001, m_estate_002
+        from plumb.engine.models import Verdict
+        from plumb.engine.verdict import compute_verdict
+        from plumb.parity.contracts import ESTATE_EXTRAS_KEY
+
+        entries = [
+            estate_entry(Verdict(v), path=f"wb{i}.twbx") for i, v in enumerate(verdicts)
+        ]
+        entries += [
+            estate_entry(error=f"boom {i}", path=f"err{i}.twbx")
+            for i in range(error_count)
+        ]
+        ctx = estate_ctx(entries)
+        estate = ctx.extras[ESTATE_EXTRAS_KEY]
+        results = [m_estate_001(ctx, {}), m_estate_002(ctx, {})]
+        assert compute_verdict(results) is estate.compute_rollup()
+
+
+class TestMMap001PostSwap:
+    def test_uninvertible_relations_fail_distinctly(self):
+        resolution = MappingResolution(
+            uninvertible=[(REL_ORDERS, "old name SALES.ORDERS is not fully qualified")]
+        )
+        bundle = make_bundle(resolution=resolution)
+        bundle.post_swap = True
+        res = m_map_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "post-swap inversion failed" in res.observed
+        assert "not fully qualified" in res.observed
+        assert "fully qualified" in res.remediation
+
+    def test_unmapped_and_uninvertible_both_reported(self):
+        resolution = MappingResolution(
+            unmapped=[REL_ITEMS],
+            uninvertible=[(REL_ORDERS, "ambiguous")],
+        )
+        bundle = make_bundle(resolution=resolution)
+        bundle.post_swap = True
+        res = m_map_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "unmapped" in res.observed
+        assert "inversion failed" in res.observed
+
+    def test_swapped_workbook_hint_on_unmapped_new_name(self):
+        swapped = SourceRelation(
+            datasource="Orders",
+            kind="table",
+            database="GALAXY",
+            schema="PRES",
+            table="FCT_ORDERS",
+        )
+        bundle = make_bundle(
+            relations=[swapped],
+            resolution=MappingResolution(unmapped=[swapped]),
+        )
+        bundle.map_new_fqns = frozenset({"GALAXY.PRES.FCT_ORDERS", "PRES.FCT_ORDERS"})
+        res = m_map_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "--post-swap" in res.remediation
+
+    def test_no_hint_when_already_post_swap(self):
+        swapped = SourceRelation(
+            datasource="Orders",
+            kind="table",
+            database="GALAXY",
+            schema="PRES",
+            table="FCT_ORDERS",
+        )
+        bundle = make_bundle(
+            relations=[swapped],
+            resolution=MappingResolution(unmapped=[swapped]),
+        )
+        bundle.map_new_fqns = frozenset({"GALAXY.PRES.FCT_ORDERS"})
+        bundle.post_swap = True
+        res = m_map_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "--post-swap" not in (res.remediation or "")
+
+
+class TestMSnap001PostSwapHint:
+    def test_missing_snapshot_on_new_name_suggests_post_swap(self):
+        """Identity-resolved NEW names with missing snapshots are the
+        forgot---post-swap signature: the remediation must warn against
+        re-snapshotting the target side."""
+        swapped = SourceRelation(
+            datasource="Orders",
+            kind="table",
+            database="GALAXY",
+            schema="PRES",
+            table="FCT_ORDERS",
+        )
+        resolution = MappingResolution(
+            resolved=[
+                ResolvedObject(
+                    relation=swapped,
+                    target_fqn="GALAXY.PRES.FCT_ORDERS",
+                    via_identity=True,
+                )
+            ]
+        )
+        bundle = make_bundle(relations=[swapped], resolution=resolution)
+        bundle.map_new_fqns = frozenset({"GALAXY.PRES.FCT_ORDERS", "PRES.FCT_ORDERS"})
+        res = m_snap_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "--post-swap" in res.remediation
+        assert "re-snapshot" in res.remediation.lower()
+
+    def test_missing_snapshot_without_new_name_keeps_snapshot_advice(self):
+        resolution = MappingResolution(
+            resolved=[ResolvedObject(relation=REL_ORDERS, target_fqn=ORDERS_TARGET)]
+        )
+        bundle = make_bundle(resolution=resolution)
+        res = m_snap_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "plumb parity snapshot" in res.remediation
+
+
+class TestRegisteredCallables:
+    def test_registered_fn_is_the_check_function(self):
+        """Pins a real bug: a helper defined between @register_check and the
+        check function silently captures the registration, so the engine
+        would invoke the helper. The registry must point at the checks."""
+        import plumb.checks.parity as checks
+
+        expected = {
+            "M-SRC-001": checks.m_src_001,
+            "M-MAP-001": checks.m_map_001,
+            "M-SNAP-001": checks.m_snap_001,
+            "M-SCHEMA-001": checks.m_schema_001,
+            "M-ROW-001": checks.m_row_001,
+            "M-AGG-001": checks.m_agg_001,
+            "M-NULL-001": checks.m_null_001,
+            "M-DIST-001": checks.m_dist_001,
+            "M-GRAIN-001": checks.m_grain_001,
+            "M-ESTATE-001": checks.m_estate_001,
+            "M-ESTATE-002": checks.m_estate_002,
+        }
+        for check_id, fn in expected.items():
+            assert registry.get_check(check_id).fn is fn, check_id

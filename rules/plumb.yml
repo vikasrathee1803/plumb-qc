@@ -174,3 +174,11 @@ checks:
     enabled: true
   - id: M-GRAIN-001
     enabled: true
+  # Estate roll-up (PARITY-PLAN-V2 E7): fire only in `plumb parity estate`
+  # runs and self-skip everywhere else. Together they express the D17
+  # roll-up: -001 (BLOCKER) blocks the wave on any blocked/errored workbook,
+  # -002 (HIGH) holds it at REVIEW on any review-level workbook.
+  - id: M-ESTATE-001
+    enabled: true
+  - id: M-ESTATE-002
+    enabled: true

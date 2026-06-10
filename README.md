@@ -99,10 +99,30 @@ them read-only (row counts, per-column aggregates, null/distinct counts,
 optional grain groups), and saves one baseline per object. `check` measures
 the mapped target objects and compares: drift is a BLOCKED verdict with the
 worst offenders named. Joins/unions/extract-only sources are refused and
-reported in coverage, never guessed at. The map file declares old→new
-renames, keys, grain, and tolerances; unlisted objects compare under their
-own names. See docs/RUNBOOK.md for the full migration play and
+reported in coverage, never guessed at. Custom SQL sources get column-level
+metrics too when their projection parses cleanly (anything unparseable
+falls back to row-count-only, honestly noted). The map file declares
+old→new renames, keys, grain, and tolerances; unlisted objects compare
+under their own names. See docs/RUNBOOK.md for the full migration play and
 docs/adr/ADR-0013-migration-parity-family.md for the design.
+
+Migrating a whole wave at once? The estate runner rolls N workbooks into
+one verdict (BLOCKED if any workbook is blocked or errored — every
+offender named, no thresholds):
+
+```
+plumb parity estate --manifest "wave1/*.twbx" --map galaxy-map.yml --phase snapshot
+# ... Autopilot swaps the wave ...
+plumb parity estate --manifest "wave1/*.twbx" --map galaxy-map.yml --phase check --post-swap
+```
+
+`--phase run` does snapshot-then-check back to back when you can read both
+sides (`--connection-legacy`/`--connection-target`); `plumb parity run`
+does the same for a single workbook. `--post-swap` checks the
+already-swapped artifact by applying the map inverted. The roll-up writes
+`estate.html` plus a per-workbook `estate.junit.xml` for CI. See
+docs/RUNBOOK.md ("Wave migration play") and docs/adr/ADR-0015 for the
+design.
 
 ## Shared baselines (Phase 2)
 

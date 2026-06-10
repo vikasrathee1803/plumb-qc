@@ -32,30 +32,61 @@ from plumb.parity.contracts import (
     snapshot_name,
     snapshot_prefix_for,
 )
-from plumb.parity.mapping import ParityMap, load_map, resolve
+from plumb.parity.mapping import ParityMap, load_map, resolve, resolve_post_swap
 from plumb.parity.metrics import ParityMetricsError, measure
 from plumb.parity.sources import extract_relations
 
 NO_SESSION_REASON = "no Snowflake session (static-only run)"
 
 
-def build_bundle(workbook: Path, map_path: Path | None, mode: ParityMode) -> ParityBundle:
+def build_bundle(
+    workbook: Path,
+    map_path: Path | None,
+    mode: ParityMode,
+    *,
+    post_swap: bool = False,
+    snapshot_prefix: str | None = None,
+) -> ParityBundle:
     """Extract relations, resolve the map, and assemble the bundle skeleton.
 
     Raises TableauParseError for unreadable workbooks and ConfigError for a
     bad map file — both before any session is touched, so a broken input
     never costs a warehouse query.
+
+    post_swap (PARITY-PLAN-V2 D14/D18): the workbook is the already-swapped
+    artifact carrying NEW object names; the map is applied inverted
+    (new->old) to recover each relation's legacy snapshot identity. Only
+    the check phase may run post-swap — a snapshot is by definition taken
+    from the pre-swap legacy side.
+
+    snapshot_prefix overrides the filename-derived prefix so an estate
+    manifest can disambiguate two same-stem workbooks (D13); both phases
+    must pass the same override or the check will not find its snapshots.
     """
+    if post_swap and mode != "check":
+        raise ValueError("--post-swap applies to the check phase only")
     relations = extract_relations(workbook)
     parity_map = load_map(map_path) if map_path is not None else ParityMap(version=1)
-    resolution = resolve(relations, parity_map)
+    if post_swap:
+        resolution = resolve_post_swap(relations, parity_map)
+    else:
+        resolution = resolve(relations, parity_map)
+    # Target-name index for the --post-swap remediation hint (D18: the hint
+    # may suggest the flag, only the analyst may set it).
+    new_fqns: set[str] = set()
+    for entry in parity_map.objects:
+        upper = entry.new.strip().upper()
+        new_fqns.add(upper)
+        new_fqns.add(".".join(upper.split(".")[-2:]))
     return ParityBundle(
         mode=mode,
         workbook_path=str(workbook),
         relations=relations,
         resolution=resolution,
-        snapshot_prefix=snapshot_prefix_for(str(workbook)),
+        snapshot_prefix=snapshot_prefix or snapshot_prefix_for(str(workbook)),
         side="legacy" if mode == "snapshot" else "target",
+        post_swap=post_swap,
+        map_new_fqns=frozenset(new_fqns),
     )
 
 
@@ -70,9 +101,13 @@ def run_parity(
     profile_name: str | None = None,
     run_id: str | None = None,
     grain_top_n: int = 20,
+    post_swap: bool = False,
+    snapshot_prefix: str | None = None,
 ) -> RunResult:
     """Run one parity phase end to end and return the engine's RunResult."""
-    bundle = build_bundle(workbook, map_path, mode)
+    bundle = build_bundle(
+        workbook, map_path, mode, post_swap=post_swap, snapshot_prefix=snapshot_prefix
+    )
 
     if mode == "check":
         _load_snapshots(bundle, store)

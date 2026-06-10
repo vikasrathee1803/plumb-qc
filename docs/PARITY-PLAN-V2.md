@@ -116,10 +116,17 @@ is unchanged except as noted.
 | ID | What it proves | Severity |
 |---|---|---|
 | M-ESTATE-001 | Roll-up: at least one workbook in the estate is BLOCKED or errored | BLOCKER |
+| M-ESTATE-002 | Roll-up: at least one workbook needs review (FAIL on REVIEW, WARN on READY_WITH_NOTES) | HIGH |
 | M-CALC-001 | (deferred) Compiled calc output parity within tolerance | HIGH |
 | M-HASH-001 | (deferred) Keyed row hash parity, capped | HIGH |
 
 All existing M-* check IDs and severities are unchanged.
+
+> **Amendment (2026-06-10, build):** M-ESTATE-002 was added during the
+> build. A single BLOCKER check cannot express D17's "estate is REVIEW
+> when any workbook is REVIEW" through engine/verdict.py (the only place
+> verdict logic lives); the 001/002 pair makes compute_verdict reproduce
+> the D17 roll-up exactly. See ADR-0015.
 
 ---
 

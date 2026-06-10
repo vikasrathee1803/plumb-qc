@@ -3,8 +3,10 @@
 Invariants under test: SQL generation is deterministic and identifier-safe;
 every generated statement passes the read-only guard; results are always
 normalized to the legacy (old) column names regardless of side; custom SQL
-is row-count-only and refuses bare semicolons; a missing object raises
-ParityMetricsError. RouteSession answers each query by SQL substring.
+refuses bare semicolons, gains column metrics when its projection is
+statically parseable (S9.2), and degrades to row-count-only on any
+discovery failure; a missing object raises ParityMetricsError.
+RouteSession answers each query by SQL substring.
 """
 
 from __future__ import annotations
@@ -393,6 +395,183 @@ class TestMissingDeclaredColumns:
         assert "NOT_A_COLUMN" in message
         assert LEGACY_FQN in message
         assert "grain" in message
+
+
+class NeedleFailSession:
+    """A fake session that fails statements containing `fail_needle` and
+    routes the rest by substring, mirroring RouteSession. Used to prove
+    that a mid-flight custom-SQL discovery/measurement failure degrades
+    instead of raising."""
+
+    def __init__(
+        self, fail_needle: str, routes: list[tuple[str, list[dict[str, Any]]]]
+    ) -> None:
+        self.fail_needle = fail_needle
+        self.routes = routes
+        self.executed: list[str] = []
+
+    def execute(self, sql: str, params: Any = None) -> Any:
+        from types import SimpleNamespace
+
+        assert_read_only(sql)
+        self.executed.append(sql)
+        if self.fail_needle in sql:
+            raise RuntimeError("simulated warehouse failure")
+        for needle, rows in self.routes:
+            if needle in sql:
+                return SimpleNamespace(rows=rows, truncated=False, query_id="fake")
+        return SimpleNamespace(rows=[], truncated=False, query_id="fake")
+
+
+class TestCustomSqlColumnMetrics:
+    """PARITY-PLAN-V2 S9.2: parseable custom SQL gains column metrics via
+    the SYSTEM$TYPEOF probe + the shared aggregate builder; every failure
+    mode degrades to v1 row-count-only without raising."""
+
+    CUSTOM = "SELECT region, amount FROM db.s.t"
+    # Sorted projected names: AMOUNT -> index 0, REGION -> index 1.
+    PROBE_ROW: dict[str, Any] = {
+        "ROW_COUNT": 7,
+        "TYPE_0": "NUMBER(38,0)[SB16]",
+        "TYPE_1": "VARCHAR(16777216)[LOB]",
+    }
+    AGG_ROW: dict[str, Any] = {
+        "ROW_COUNT": 7,
+        "NULL_0": 1,
+        "SUM_0": 100,
+        "MIN_0": 1,
+        "MAX_0": 50,
+        "NULL_1": 2,
+    }
+
+    def column_session(self) -> RouteSession:
+        return (
+            RouteSession()
+            .add("SYSTEM$TYPEOF", [dict(self.PROBE_ROW)])
+            .add("COUNT_IF", [dict(self.AGG_ROW)])
+        )
+
+    def test_parseable_custom_sql_carries_column_metrics(self) -> None:
+        session = self.column_session()
+        metrics = measure(session, resolved_custom_sql(self.CUSTOM), "legacy")
+
+        assert metrics.object_fqn == "custom-sql"
+        assert metrics.row_count == 7
+        assert sorted(metrics.columns) == ["AMOUNT", "REGION"]
+        amount = metrics.columns["AMOUNT"]
+        assert amount.data_type == "NUMBER(38,0)"
+        assert amount.null_count == 1
+        assert (amount.sum_value, amount.min_value, amount.max_value) == (100.0, 1.0, 50.0)
+        region = metrics.columns["REGION"]
+        assert region.data_type == "VARCHAR(16777216)"
+        assert region.null_count == 2
+        assert region.sum_value is None and region.min_value is None
+        # Custom SQL still contributes no distinct/grain coverage.
+        assert metrics.distinct_counts == {}
+        assert metrics.grain_groups == []
+
+    def test_probe_then_aggregate_with_custom_sql_verbatim(self) -> None:
+        session = self.column_session()
+        measure(session, resolved_custom_sql(self.CUSTOM), "legacy")
+        assert len(session.executed) == 2
+        probe, aggregate = session.executed
+        assert "SYSTEM$TYPEOF" in probe
+        assert 'COUNT_IF("AMOUNT" IS NULL) AS NULL_0' in aggregate
+        assert 'SUM("AMOUNT") AS SUM_0' in aggregate
+        assert 'COUNT_IF("REGION" IS NULL) AS NULL_1' in aggregate
+        # The workbook's SQL is embedded verbatim in both statements.
+        assert self.CUSTOM in probe
+        assert self.CUSTOM in aggregate
+        for sql in session.executed:
+            assert_read_only(sql)
+
+    def test_same_statements_byte_identical_on_both_sides(self) -> None:
+        legacy = self.column_session()
+        target = self.column_session()
+        measure(legacy, resolved_custom_sql(self.CUSTOM), "legacy")
+        measure(target, resolved_custom_sql(self.CUSTOM), "target")
+        assert legacy.executed == target.executed
+
+    def test_unparseable_projection_is_row_count_only_without_error(self) -> None:
+        # A star projection refuses extraction; behavior is exactly v1.
+        session = RouteSession().add("ROW_COUNT", [{"ROW_COUNT": 5}])
+        metrics = measure(session, resolved_custom_sql("SELECT * FROM db.s.t"), "legacy")
+        assert metrics.row_count == 5
+        assert metrics.columns == {}
+        assert len(session.executed) == 1
+        assert "SYSTEM$TYPEOF" not in session.executed[0]
+
+    def test_aggregate_only_projection_is_row_count_only(self) -> None:
+        session = RouteSession().add("ROW_COUNT", [{"ROW_COUNT": 3}])
+        metrics = measure(
+            session, resolved_custom_sql("SELECT SUM(a) AS s FROM db.s.t"), "legacy"
+        )
+        assert metrics.row_count == 3
+        assert metrics.columns == {}
+        assert len(session.executed) == 1
+
+    def test_probe_failure_degrades_to_count_query_without_raising(self) -> None:
+        session = NeedleFailSession(
+            "SYSTEM$TYPEOF", [("ROW_COUNT", [{"ROW_COUNT": 9}])]
+        )
+        metrics = measure(session, resolved_custom_sql(self.CUSTOM), "legacy")
+        assert metrics.row_count == 9
+        assert metrics.columns == {}
+        # Probe attempted, then the v1 count query.
+        assert len(session.executed) == 2
+        assert "SYSTEM$TYPEOF" in session.executed[0]
+        assert "COUNT(*) AS ROW_COUNT" in session.executed[1]
+        assert "SYSTEM$TYPEOF" not in session.executed[1]
+
+    def test_unprovable_types_degrade_using_probe_row_count(self) -> None:
+        # MAX(SYSTEM$TYPEOF(..)) is NULL over an empty result: the type
+        # cannot be proven, so no column metrics — but the probe's
+        # COUNT(*) already answered the row count, no extra statement.
+        session = RouteSession().add(
+            "SYSTEM$TYPEOF", [{"ROW_COUNT": 0, "TYPE_0": None, "TYPE_1": None}]
+        )
+        metrics = measure(session, resolved_custom_sql(self.CUSTOM), "legacy")
+        assert metrics.row_count == 0
+        assert metrics.columns == {}
+        assert len(session.executed) == 1
+
+    def test_aggregate_failure_mid_flight_degrades_without_raising(self) -> None:
+        session = NeedleFailSession(
+            "COUNT_IF", [("SYSTEM$TYPEOF", [dict(self.PROBE_ROW)])]
+        )
+        metrics = measure(session, resolved_custom_sql(self.CUSTOM), "legacy")
+        assert metrics.row_count == 7
+        assert metrics.columns == {}
+        assert len(session.executed) == 2
+
+    def test_hostile_alias_quoted_and_escaped_in_generated_sql(self) -> None:
+        sql = 'SELECT amount AS "Bad""Alias" FROM db.s.t'
+        session = (
+            RouteSession()
+            .add(
+                "SYSTEM$TYPEOF",
+                [{"ROW_COUNT": 2, "TYPE_0": "VARCHAR(10)[LOB]"}],
+            )
+            .add("COUNT_IF", [{"ROW_COUNT": 2, "NULL_0": 0}])
+        )
+        metrics = measure(session, resolved_custom_sql(sql), "legacy")
+        probe, aggregate = session.executed
+        # The embedded quote is doubled inside a quoted identifier — the
+        # alias cannot break out of the wrapper.
+        assert 'SYSTEM$TYPEOF("BAD""ALIAS")' in probe
+        assert 'COUNT_IF("BAD""ALIAS" IS NULL) AS NULL_0' in aggregate
+        for statement in session.executed:
+            assert_read_only(statement)
+        assert 'BAD"ALIAS' in metrics.columns
+        assert metrics.columns['BAD"ALIAS'].data_type == "VARCHAR(10)"
+
+    def test_refusals_unchanged_before_any_query(self) -> None:
+        # The v1 refusals (empty text, bare semicolon) still raise before
+        # any statement is issued, whatever the projection parser thinks.
+        session = RouteSession()
+        with pytest.raises(ParityMetricsError, match="semicolon"):
+            measure(session, resolved_custom_sql("SELECT a FROM t; SELECT 1"), "legacy")
+        assert session.executed == []
 
 
 class TestGrainValueStringification:

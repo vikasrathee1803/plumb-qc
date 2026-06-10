@@ -263,3 +263,213 @@ def resolve(relations: list[SourceRelation], parity_map: ParityMap) -> MappingRe
         else:
             resolution.unmapped.append(relation)
     return resolution
+
+
+# --- post-swap mode (PARITY-PLAN-V2 E8, D14/D18) ----------------------------
+
+
+def _new_name_collisions(parity_map: ParityMap) -> list[str]:
+    """One message per `new` name claimed by more than one entry.
+
+    Many-to-one maps are legal for forward checking (two legacy tables may
+    both be proven against the same galaxy table — see the PARITY-PLAN-V2
+    risk table); they only become an error when the map must be inverted,
+    because the inverse direction is then ambiguous. That is why this lives
+    here and not in a ParityMap validator."""
+    by_new: dict[str, list[str]] = {}
+    for entry in parity_map.objects:
+        by_new.setdefault(entry.new.strip().upper(), []).append(entry.old)
+    return [
+        f"new object {new!r} is mapped from multiple old objects: {', '.join(olds)}"
+        for new, olds in by_new.items()
+        if len(olds) > 1
+    ]
+
+
+def invert_map(parity_map: ParityMap) -> ParityMap:
+    """Swap old/new on every entry so the map reads new->old (D14).
+
+    Side-ness, verified against metrics.measure(): an entry's keys/grain
+    are authored in OLD-side (relation/legacy) names — measure() uses them
+    as-is on side="legacy" and translates each through column_map only on
+    side="target"; columns is {old: new}, and metrics are always REPORTED
+    under the old names. Inverting therefore renames keys/grain into
+    new-side terms via the entry's own columns rename (columns.get(name,
+    name)) and flips columns to {new: old}, so a forward resolve with the
+    inverted map hands measure() relation-side names it can use directly
+    and a column_map pointing back at the legacy side. The flip is safe
+    because column rename targets are validated unique at load time.
+
+    `ignore` globs are authored against old-side names and CANNOT be
+    mechanically translated — a glob over legacy names says nothing about
+    which galaxy names to skip — so they are carried over unchanged;
+    post-swap resolution matches them against the names in the artifact
+    actually being checked.
+
+    Raises ConfigError naming every offender when the map is not
+    invertible: an `old` that is not fully qualified (a 2-part old cannot
+    become a valid `new`, and cannot reconstruct the legacy snapshot FQN),
+    or a duplicate `new` (non-injective: two legacy objects merged into one
+    galaxy object — a map AUTHORING error per D14, refused at inversion
+    time, never a runtime surprise).
+
+    Property: for a fully-qualified injective map,
+    invert_map(invert_map(m)) == m (entry order is preserved)."""
+    problems = [
+        f"old name {entry.old!r} is not fully qualified; a 2-part old cannot "
+        "become a valid `new` and cannot reconstruct the legacy snapshot identity"
+        for entry in parity_map.objects
+        if len(_name_parts(entry.old)) != 3
+    ]
+    problems.extend(_new_name_collisions(parity_map))
+    if problems:
+        raise ConfigError(
+            "cannot invert parity map for post-swap mode:\n  " + "\n  ".join(problems)
+        )
+    return ParityMap(
+        version=1,
+        defaults=parity_map.defaults.model_copy(),
+        objects=[
+            ObjectMapping(
+                old=entry.new,
+                new=entry.old,
+                keys=[entry.columns.get(key, key) for key in entry.keys],
+                grain=[entry.columns.get(name, name) for name in entry.grain],
+                columns={new_col: old_col for old_col, new_col in entry.columns.items()},
+                tolerance_pct=entry.tolerance_pct,
+            )
+            for entry in parity_map.objects
+        ],
+        ignore=list(parity_map.ignore),
+    )
+
+
+def _match_entry_by_new(fqn: str, entries: list[ObjectMapping]) -> ObjectMapping | None:
+    """First entry (file order) whose `new` names the relation FQN, or None.
+
+    Same explicit semantics as _matches: entry.new is always 3-part; the
+    relation FQN may be 2-part when the swapped workbook omits the database
+    (tail-match on >=2 shared trailing parts, case-insensitive, never
+    1-part)."""
+    for entry in entries:
+        if _matches(entry.new, fqn):
+            return entry
+    return None
+
+
+def resolve_post_swap(
+    relations: list[SourceRelation], parity_map: ParityMap
+) -> MappingResolution:
+    """Resolve relations from the ALREADY-SWAPPED artifact (D14/D18).
+
+    Table relations here carry NEW (galaxy) FQNs; the snapshots were taken
+    under LEGACY names. Each relation is matched against entry.new (see
+    _match_entry_by_new) and, when the entry's old is fully qualified, a
+    synthetic legacy SourceRelation is built from it so snapshot_name()
+    reproduces the pre-swap snapshot identity exactly; target_fqn stays the
+    relation's own NEW FQN as the swapped workbook spells it, so
+    measure(..., "target") measures the new object exactly as the v1 check
+    phase would. This is deliberately NOT resolve(relations,
+    invert_map(map)): a plain forward resolve keys the snapshot on the
+    relation itself (the NEW name) and could never reach the legacy
+    snapshots.
+
+    A matched entry whose old is 2-part lands in resolution.uninvertible
+    with a machine-readable reason, not in plain unmapped: without the
+    database part the legacy snapshot FQN cannot be reconstructed, and
+    M-MAP-001 must say so distinctly. Unmatched relations follow the v1
+    order: ignore glob (patterns are matched against the relation's own FQN
+    — the names in the artifact being checked, here the NEW names), then
+    identity fallback (3-part only, same name both sides), else unmapped.
+    Refused relations appear in no list. Custom SQL resolves verbatim
+    exactly as v1 — but custom SQL whose text was edited during the swap
+    hashes to a different snapshot label and surfaces via M-SNAP-001.
+
+    Case caveat: snapshot_name()'s trailing hash is case-SENSITIVE over the
+    datasource|label text, so entry.old must be spelled EXACTLY as the
+    pre-swap workbook spelled the FQN (case and database qualification
+    included). A mismatch surfaces honestly as a missing snapshot
+    (M-SNAP-001); the remediation is to re-spell `old:` in the map to match
+    the pre-swap workbook's spelling, not to re-snapshot.
+
+    Raises ConfigError before resolving anything when the map's `new` names
+    are not injective, naming every collision (D14: a map authoring error,
+    not a runtime surprise)."""
+    collisions = _new_name_collisions(parity_map)
+    if collisions:
+        raise ConfigError(
+            "cannot resolve post-swap: the map is not injective, so new names "
+            "cannot identify their legacy objects:\n  " + "\n  ".join(collisions)
+        )
+    resolution = MappingResolution()
+    defaults = parity_map.defaults
+    for relation in relations:
+        if relation.kind == "custom_sql":
+            resolution.resolved.append(
+                ResolvedObject(
+                    relation=relation,
+                    target_fqn="",
+                    via_identity=True,
+                    tolerance_pct=defaults.tolerance_pct,
+                )
+            )
+            continue
+        if relation.kind != "table":
+            continue
+        fqn = relation.fqn
+        if fqn is None:
+            resolution.unmapped.append(relation)
+            continue
+        entry = _match_entry_by_new(fqn, parity_map.objects)
+        if entry is not None:
+            if len(_name_parts(entry.old)) != 3:
+                resolution.uninvertible.append(
+                    (
+                        relation,
+                        f"old name {entry.old} is not fully qualified; cannot "
+                        "reconstruct the legacy snapshot identity",
+                    )
+                )
+                continue
+            database, schema, table = parse_fqn(entry.old)
+            synthetic = SourceRelation(
+                datasource=relation.datasource,
+                kind="table",
+                database=database,
+                schema=schema,
+                table=table,
+                connection_class=relation.connection_class,
+                has_extract=relation.has_extract,
+            )
+            tolerance = (
+                entry.tolerance_pct
+                if entry.tolerance_pct is not None
+                else defaults.tolerance_pct
+            )
+            resolution.resolved.append(
+                ResolvedObject(
+                    relation=synthetic,
+                    target_fqn=fqn,
+                    via_identity=False,
+                    column_map=dict(entry.columns),
+                    keys=tuple(entry.keys),
+                    grain=tuple(entry.grain),
+                    tolerance_pct=tolerance,
+                )
+            )
+            continue
+        if _is_ignored(fqn, parity_map.ignore):
+            resolution.ignored.append(relation)
+            continue
+        if defaults.identity_fallback and len(_name_parts(fqn)) >= 3:
+            resolution.resolved.append(
+                ResolvedObject(
+                    relation=relation,
+                    target_fqn=fqn,
+                    via_identity=True,
+                    tolerance_pct=defaults.tolerance_pct,
+                )
+            )
+        else:
+            resolution.unmapped.append(relation)
+    return resolution

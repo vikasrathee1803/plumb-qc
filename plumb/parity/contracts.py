@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from plumb.engine.models import RunResult, Verdict
+
 RelationKind = Literal["table", "custom_sql", "refused"]
 
 # Machine-readable refusal reasons (PARITY-PLAN D6). "extract-only" means the
@@ -81,6 +83,11 @@ class MappingResolution:
     resolved: list[ResolvedObject] = field(default_factory=list)
     unmapped: list[SourceRelation] = field(default_factory=list)
     ignored: list[SourceRelation] = field(default_factory=list)
+    # Post-swap only: relations whose legacy identity could not be derived
+    # from the map (for example a 2-part `old` that cannot reconstruct the
+    # snapshot FQN). Each carries a machine-readable reason; M-MAP-001
+    # reports them separately from plain `unmapped`.
+    uninvertible: list[tuple[SourceRelation, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -234,9 +241,93 @@ class ParityBundle:
     errors: dict[str, str] = field(default_factory=dict)
     # set when no session was available (static-only) -> value checks SKIP
     live_unavailable_reason: str | None = None
+    # check phase against the already-swapped artifact: the map was applied
+    # inverted (new->old) to recover snapshot identity (PARITY-PLAN-V2 D14)
+    post_swap: bool = False
+    # Upper-cased `new:` FQNs (and their SCHEMA.TABLE tails) from the map,
+    # so the checks can suggest --post-swap when a relation already carries
+    # a target name. Remediation hint only — never drives a status (D18:
+    # post-swap stays opt-in, never auto-detected).
+    map_new_fqns: frozenset[str] = frozenset()
 
 
 EXTRAS_KEY = "parity_bundle"
+
+# --- estate (PARITY-PLAN-V2 E7) ------------------------------------------
+
+ParityPhase = Literal["snapshot", "check", "run"]
+
+ESTATE_EXTRAS_KEY = "parity_estate"
+
+# Verdict aggregation order for the estate roll-up (D17): worst first.
+_VERDICT_ORDER: tuple[Verdict, ...] = (
+    Verdict.BLOCKED,
+    Verdict.REVIEW,
+    Verdict.READY_WITH_NOTES,
+    Verdict.READY,
+)
+_VERDICT_RANK: dict[Verdict, int] = {v: i for i, v in enumerate(_VERDICT_ORDER)}
+
+
+def worst_verdict(verdicts: list[Verdict]) -> Verdict | None:
+    """The worst verdict in the list (BLOCKED < REVIEW < READY_WITH_NOTES
+    < READY), or None for an empty list."""
+    if not verdicts:
+        return None
+    return min(verdicts, key=lambda v: _VERDICT_RANK[v])
+
+
+@dataclass
+class WorkbookParity:
+    """One workbook's outcome inside an estate run.
+
+    `error` is set when the workbook could not run at all (unreadable
+    workbook, bad map); it never aborts the estate — M-ESTATE-001 reports
+    it as BLOCKED-equivalent. A `run` phase carries both per-phase results;
+    `snapshot`/`check` phases carry one."""
+
+    workbook_path: str
+    map_path: str | None = None
+    snapshot_result: RunResult | None = None
+    check_result: RunResult | None = None
+    error: str | None = None
+
+    @property
+    def verdict(self) -> Verdict | None:
+        """Worst verdict across the phases that ran, or None when the
+        workbook never produced a result (see `error`)."""
+        return worst_verdict(
+            [r.verdict for r in (self.snapshot_result, self.check_result) if r is not None]
+        )
+
+
+@dataclass
+class EstateResult:
+    """The whole migration wave's outcome, assembled by parity/estate.py
+    and carried in CheckContext.extras[ESTATE_EXTRAS_KEY] for the roll-up
+    checks (M-ESTATE-*). `rollup` is pure D17 aggregation of per-workbook
+    verdicts (an errored workbook counts as BLOCKED); the estate-level
+    check run mirrors it through M-ESTATE-001/002 so reports and CI agree."""
+
+    phase: ParityPhase
+    entries: list[WorkbookParity] = field(default_factory=list)
+    manifest_ref: str | None = None
+    created_at: str = ""
+    rollup: Verdict | None = None
+
+    def compute_rollup(self) -> Verdict | None:
+        """D17: BLOCKED if any workbook is BLOCKED or errored; else REVIEW
+        if any REVIEW; else READY_WITH_NOTES if any; READY only when every
+        workbook is READY. None for an empty estate."""
+        if not self.entries:
+            return None
+        verdicts: list[Verdict] = []
+        for entry in self.entries:
+            if entry.error is not None or entry.verdict is None:
+                verdicts.append(Verdict.BLOCKED)
+            else:
+                verdicts.append(entry.verdict)
+        return worst_verdict(verdicts)
 
 _SAFE_PART = re.compile(r"[^a-z0-9_-]+")
 

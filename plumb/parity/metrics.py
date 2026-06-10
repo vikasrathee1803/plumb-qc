@@ -13,11 +13,21 @@ comparable by the M-* checks. `object_fqn` is the canonical upper-cased FQN
 actually queried, or "custom-sql" for custom SQL relations.
 
 Custom SQL relations run the workbook's SELECT verbatim on both sides,
-wrapped only for a row count (PARITY-PLAN D6/D7 — an honest v1 gap: no
-column metrics, no distinct, no grain). Custom SQL containing a semicolon
-outside string literals or quoted identifiers is refused before wrapping
-as a cheap multi-statement guard; connect.snowflake.assert_read_only on
-the session remains the real gate.
+wrapped as a subquery. v1 measured a row count only (PARITY-PLAN D6/D7);
+when sql_projection can statically name the projection's output columns
+(PARITY-PLAN-V2 S9.2 / D15), per-column null counts and numeric
+SUM/MIN/MAX are measured too. Column types cannot come from
+INFORMATION_SCHEMA (it cannot describe a subquery) and the session's
+read-only guard refuses DESCRIBE, so types are proven in-band with
+MAX(SYSTEM$TYPEOF(column)) over the wrapped SQL — a plain SELECT the
+guard accepts. Any failure to prove a type or to measure degrades
+silently to the v1 row-count-only metrics: never guess a type, never
+fail the run for optional coverage (the checks layer already reports
+column-less custom SQL as row-count-only coverage). Distinct counts and
+grain stay out of scope for custom SQL. Custom SQL containing a
+semicolon outside string literals or quoted identifiers is refused
+before wrapping as a cheap multi-statement guard;
+connect.snowflake.assert_read_only on the session remains the real gate.
 
 Identifier safety: table and column names arrive from workbook XML and
 map.yml, so every identifier is emitted upper-cased and double-quoted with
@@ -45,6 +55,7 @@ from plumb.parity.contracts import (
     ResolvedObject,
 )
 from plumb.parity.mapping import parse_fqn
+from plumb.parity.sql_projection import extract_projected_columns
 
 NULL_GROUP_VALUE = "∅"
 
@@ -187,6 +198,13 @@ def grain_sql(quoted_fqn: str, grain_physical: tuple[str, ...], top_n: int) -> s
     )
 
 
+def custom_sql_from_clause(text: str) -> str:
+    """The wrapped FROM target every custom-SQL statement queries. The
+    workbook's SQL runs verbatim inside it, byte-identical on both sides;
+    only the wrapper around it differs by statement."""
+    return f"(\n{text}\n) AS PLUMB_PARITY_SRC"
+
+
 def custom_sql_count_sql(custom_sql: str) -> str:
     """Wrap the workbook's custom SQL verbatim for a row count, refusing
     multi-statement text up front (assert_read_only is the real gate)."""
@@ -198,7 +216,37 @@ def custom_sql_count_sql(custom_sql: str) -> str:
             "custom SQL contains a semicolon outside string literals; "
             "refusing to wrap potentially multi-statement SQL"
         )
-    return f"SELECT COUNT(*) AS ROW_COUNT\nFROM (\n{text}\n) AS PLUMB_PARITY_SRC"
+    return f"SELECT COUNT(*) AS ROW_COUNT\nFROM {custom_sql_from_clause(text)}"
+
+
+def custom_sql_probe_sql(text: str, names: list[str]) -> str:
+    """Row count plus per-column type proof for a custom SQL projection.
+
+    MAX(SYSTEM$TYPEOF(col)) returns the column's logical type with a
+    physical-representation suffix (e.g. 'NUMBER(38,0)[SB16]'); the
+    logical prefix is the expression's static type, so it is constant
+    across rows and MAX is a deterministic way to aggregate it into the
+    single result row. Over an empty result MAX is NULL — exactly the
+    "cannot prove a type" signal the caller degrades on. `names` come
+    from sqlglot output and are untrusted text: every one goes through
+    _quote_ident (TYPE_i aliases are positional, never derived from the
+    name). The caller has already validated `text` via
+    custom_sql_count_sql."""
+    items = ["COUNT(*) AS ROW_COUNT"]
+    for index, name in enumerate(names):
+        items.append(f"MAX(SYSTEM$TYPEOF({_quote_ident(name)})) AS TYPE_{index}")
+    return "SELECT\n  " + ",\n  ".join(items) + f"\nFROM {custom_sql_from_clause(text)}"
+
+
+def _typeof_data_type(value: Any) -> str | None:
+    """Logical DATA_TYPE from a SYSTEM$TYPEOF result ('NUMBER(38,0)[SB16]'
+    -> 'NUMBER(38,0)'), or None when the type cannot be proven (NULL or
+    empty — e.g. the custom SQL returned no rows). None means degrade:
+    a guessed type could emit SUM over a non-numeric column."""
+    if value is None:
+        return None
+    text = str(value).split("[", 1)[0].strip().upper()
+    return text or None
 
 
 def measure(
@@ -330,12 +378,84 @@ def _discover_columns(
 
 
 def _measure_custom_sql(session: Any, custom_sql: str) -> ParityMetrics:
-    sql = custom_sql_count_sql(custom_sql)
-    rows = _execute(session, sql, "custom-sql")
+    """Measure a custom SQL relation: column metrics when the projection
+    is statically parseable (S9.2), v1 row-count-only otherwise.
+
+    custom_sql_count_sql runs first for its refusals (empty text, bare
+    semicolon) so the v1 refusal behavior is unchanged whatever the
+    projection parser thinks of the text."""
+    count_sql = custom_sql_count_sql(custom_sql)
+    text = custom_sql.strip()
+    names = extract_projected_columns(text)
+    if names:
+        measured = _measure_custom_sql_columns(session, text, sorted(names))
+        if measured is not None:
+            return measured
+    rows = _execute(session, count_sql, "custom-sql")
     if not rows:
         raise ParityMetricsError("row count query returned no rows for custom-sql")
     return ParityMetrics(
         object_fqn="custom-sql", row_count=_as_int(rows[0].get("ROW_COUNT"))
+    )
+
+
+def _measure_custom_sql_columns(
+    session: Any, text: str, names: list[str]
+) -> ParityMetrics | None:
+    """Column metrics for a custom SQL whose projection parsed, or a
+    degraded result; never raises (D15: optional coverage must not fail
+    the run — the plain count path still raises for a relation that
+    cannot be measured at all).
+
+    Returns None only when the probe query itself failed or returned no
+    row: the caller falls back to the v1 count query, whose failure is a
+    real measurement error. After a successful probe, any type that
+    cannot be proven and any aggregate failure degrade to row-count-only
+    using the probe's COUNT(*) — same semantics as the count query, no
+    extra statement, and nothing misleading recorded."""
+    try:
+        probe_rows = _execute(session, custom_sql_probe_sql(text, names), "custom-sql")
+    except ParityMetricsError:
+        return None
+    if not probe_rows:
+        return None
+    probe = probe_rows[0]
+    row_count_only = ParityMetrics(
+        object_fqn="custom-sql", row_count=_as_int(probe.get("ROW_COUNT"))
+    )
+
+    # (reported, physical, data_type): reported == physical — custom SQL
+    # has no column_map, the projection's output names are queried as-is.
+    columns: list[tuple[str, str, str]] = []
+    for index, name in enumerate(names):
+        data_type = _typeof_data_type(probe.get(f"TYPE_{index}"))
+        if data_type is None:
+            return row_count_only
+        columns.append((name, name, data_type))
+
+    agg = aggregate_sql(custom_sql_from_clause(text), columns, [])
+    try:
+        rows = _execute(session, agg, "custom-sql")
+    except ParityMetricsError:
+        return row_count_only
+    if not rows:
+        return row_count_only
+    row = rows[0]
+
+    column_metrics: dict[str, ColumnMetrics] = {}
+    for index, (reported, _, data_type) in enumerate(columns):
+        metrics = ColumnMetrics(
+            data_type=data_type, null_count=_as_int(row.get(f"NULL_{index}"))
+        )
+        if _is_numeric(data_type):
+            metrics.sum_value = _as_float(row.get(f"SUM_{index}"))
+            metrics.min_value = _as_float(row.get(f"MIN_{index}"))
+            metrics.max_value = _as_float(row.get(f"MAX_{index}"))
+        column_metrics[reported] = metrics
+    return ParityMetrics(
+        object_fqn="custom-sql",
+        row_count=_as_int(row.get("ROW_COUNT")),
+        columns=column_metrics,
     )
 
 

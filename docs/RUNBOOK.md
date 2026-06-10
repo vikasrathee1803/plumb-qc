@@ -102,19 +102,38 @@ Per workbook, three steps; nothing is eyeballed:
    errors if any source could not be measured or written. Refused sources
    (joins, unions, extract-only, published) appear in coverage — decide
    per case whether they need a manual check.
-2. **Check the migrated side — against the SAME (pre-swap) workbook**:
+2. **Check the migrated side — normally against the SAME (pre-swap)
+   workbook**:
    `plumb parity check --workbook sales.twbx --map galaxy-map.yml`
    The workbook is the manifest of legacy objects; the map supplies the
-   new names. Do not run `check` on a re-pointed copy: after a rename
-   swap its relations carry the new FQNs, so snapshots and map entries no
-   longer match and every renamed object reads as a missing snapshot.
-   Exit 0 = parity proven (READY). Exit 2 = BLOCKED with the drifted
-   objects, columns, and metrics named in the report. Use `--out` to keep
-   per-workbook reports; JUnit output slots into CI.
+   new names. Exit 0 = parity proven (READY). Exit 2 = BLOCKED with the
+   drifted objects, columns, and metrics named in the report. Use `--out`
+   to keep per-workbook reports; JUnit output slots into CI.
+
+   **Already swapped?** If the workbook has been re-pointed first (its
+   relations carry the NEW FQNs), add `--post-swap`: the map is applied
+   inverted (new→old) to find the legacy snapshots. This requires every
+   mapped `old:` name to be fully qualified, spelled exactly as the
+   pre-swap workbook spelled it, unique per `new:` (no two legacy objects
+   merged into one target), and the workbook FILE NAME unchanged since the
+   snapshot (the snapshot prefix derives from the file stem). Custom SQL
+   whose text was edited during the swap cannot be re-identified and
+   surfaces as a missing snapshot. Forgetting the flag is safe: the check
+   blocks and the report's remediation names `--post-swap` — do NOT
+   re-snapshot at that point, that would capture the target side as the
+   baseline.
 3. **Re-point and publish** once parity is proven: Tableau Autopilot
    (`swap-connection` same-schema, or `plan-swap`/`swap-source` when names
    changed) validates, backs up, and saves atomically; parity never edits
    workbooks.
+
+Have simultaneous read access to both sides? `plumb parity run --workbook
+sales.twbx --map galaxy-map.yml --connection-legacy legacy.yml
+--connection-target galaxy.yml` does snapshot-then-check in one command
+(two sessions opened in sequence, never together); reports land in
+`snapshot/` and `check/` under `--out`, and the exit code is the worst of
+the two verdicts. If the snapshot phase is BLOCKED the check phase is
+skipped — fix the legacy capture first.
 
 The map file (galaxy-map.yml) declares old→new object renames, per-object
 keys (distinct-count parity), grain columns (grouped-count parity), column
@@ -125,3 +144,44 @@ per ADR-0012 works for a whole team).
 
 Different accounts for legacy and galaxy? Pass `--connection PATH` to
 either phase to use an alternate connection profile file.
+
+## Wave migration play (estate runner)
+
+A migration wave is N workbooks, one command per phase, one roll-up
+verdict (PARITY-PLAN-V2 E7):
+
+1. **Build the manifest.** Either a glob —
+   `plumb parity estate --manifest "wave1/*.twbx" --map galaxy-map.yml ...`
+   (every workbook gets the `--map` default) — or a YAML file when
+   workbooks need their own maps:
+
+   ```yaml
+   version: 1
+   workbooks:
+     - path: wave1/sales.twbx        # relative to this manifest file
+       map: maps/sales-map.yml
+     - path: wave1/finance.twbx      # no map: uses --map, else identity
+   ```
+
+   Two workbooks with the same file stem collide on snapshot names; the
+   manifest loader refuses them — give one entry an explicit
+   `snapshot_prefix`.
+2. **Snapshot the wave** while the legacy side exists:
+   `plumb parity estate --manifest wave1.yml --phase snapshot --connection legacy.yml`
+3. **Swap the wave** with Tableau Autopilot (download → swap → publish;
+   parity consumes the local files, never Tableau Cloud directly — ADR
+   D10).
+4. **Check the wave**:
+   `plumb parity estate --manifest wave1.yml --phase check --connection galaxy.yml`
+   (add `--post-swap` when checking the swapped artifacts, with the same
+   caveats as the single-workbook play). With access to both sides at
+   once, `--phase run --connection-legacy ... --connection-target ...`
+   does steps 2 and 4 back to back.
+5. **Read the roll-up.** Workbooks run sequentially and an error in one
+   never aborts the rest. The estate verdict is explicit (D17): BLOCKED if
+   ANY workbook is blocked or errored, REVIEW if any needs review, READY
+   only when every workbook is READY — there is no percentage threshold;
+   every offender is named (M-ESTATE-001/002). `estate.html` is the
+   per-workbook table, `estate.junit.xml` (one test case per workbook)
+   slots into CI, and `--fail-on` overrides the ruleset gate for the exit
+   code.

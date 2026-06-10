@@ -369,10 +369,25 @@ def parity_check(
     grain_top_n: int = typer.Option(
         20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
     ),
+    post_swap: bool = typer.Option(
+        False,
+        "--post-swap",
+        help="The workbook is the already-swapped artifact (NEW object names); "
+        "apply the map inverted to find the legacy snapshots (PARITY-PLAN-V2 D14).",
+    ),
 ) -> None:
     """Measure the migrated side and compare it against the legacy snapshots."""
     _run_parity_phase(
-        "check", workbook, map_file, profile, rules, connection, out, static_only, grain_top_n
+        "check",
+        workbook,
+        map_file,
+        profile,
+        rules,
+        connection,
+        out,
+        static_only,
+        grain_top_n,
+        post_swap=post_swap,
     )
 
 
@@ -386,6 +401,7 @@ def _run_parity_phase(
     out: Path | None,
     static_only: bool,
     grain_top_n: int,
+    post_swap: bool = False,
 ) -> None:
     from plumb.checks._tableau import TableauParseError as _ParseError
     from plumb.parity.runner import build_bundle, run_parity
@@ -399,8 +415,8 @@ def _run_parity_phase(
     # workbook or map must never cost a connection (the second parse of a
     # local XML inside run_parity is accepted).
     try:
-        build_bundle(workbook, map_file, mode)  # type: ignore[arg-type]
-    except (_ParseError, ConfigError) as exc:
+        build_bundle(workbook, map_file, mode, post_swap=post_swap)  # type: ignore[arg-type]
+    except (_ParseError, ConfigError, ValueError) as exc:
         raise _fail(str(exc)) from exc
     session = None if static_only else _open_session(ruleset, run_id, connection)
     try:
@@ -414,6 +430,7 @@ def _run_parity_phase(
             profile_name=profile,
             run_id=run_id,
             grain_top_n=grain_top_n,
+            post_swap=post_swap,
         )
     except (_ParseError, ConfigError, ValueError) as exc:
         raise _fail(str(exc)) from exc
@@ -430,6 +447,240 @@ def _run_parity_phase(
 
     _print_summary(result, out_dir)
     raise typer.Exit(exit_code_for_verdict(result.verdict, ruleset.defaults.fail_on))
+
+
+@parity_app.command("run")
+def parity_run(
+    workbook: Path = typer.Option(
+        ..., "--workbook", help="The .twb/.twbx to snapshot and check in one go."
+    ),
+    map_file: Path = typer.Option(
+        None, "--map", help="old->new object map (galaxy-map.yml); identity when omitted."
+    ),
+    profile: str = typer.Option(None, "--profile", help="Ruleset profile overlay."),
+    rules: Path = typer.Option(None, "--rules", help="Path to a ruleset file."),
+    connection_legacy: Path = typer.Option(
+        None, "--connection-legacy", help="Connection profile for the legacy side (snapshot)."
+    ),
+    connection_target: Path = typer.Option(
+        None, "--connection-target", help="Connection profile for the target side (check)."
+    ),
+    out: Path = typer.Option(None, "--out", help="Report output directory."),
+    static_only: bool = typer.Option(
+        False, "--static-only", help="Extraction and mapping checks only; no Snowflake."
+    ),
+    grain_top_n: int = typer.Option(
+        20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
+    ),
+) -> None:
+    """Both-live convenience (PARITY-PLAN-V2 D16): snapshot the legacy side,
+    then immediately check the target side, in one command. Two sessions are
+    opened in sequence, never simultaneously; reports land in snapshot/ and
+    check/ under --out."""
+    from plumb.checks._tableau import TableauParseError as _ParseError
+    from plumb.parity.runner import build_bundle, run_parity
+
+    if map_file is not None and not map_file.exists():
+        raise _fail(f"map file not found: {map_file}")
+
+    ruleset = _resolve_ruleset(rules, profile)
+    # One run id for both phases: the audit trail and both sessions'
+    # QUERY_TAGs name this invocation as a single proof.
+    run_id = str(uuid.uuid4())
+    try:
+        build_bundle(workbook, map_file, "snapshot")
+    except (_ParseError, ConfigError) as exc:
+        raise _fail(str(exc)) from exc
+
+    out_dir = out or LATEST_DIR
+    results: list[RunResult] = []
+    phases: list[tuple[str, Path | None]] = [
+        ("snapshot", connection_legacy),
+        ("check", connection_target),
+    ]
+    for mode, connection in phases:
+        session = None if static_only else _open_session(ruleset, run_id, connection)
+        try:
+            result = run_parity(
+                workbook=workbook,
+                mode=mode,  # type: ignore[arg-type]
+                ruleset=ruleset,
+                store=_baseline_store(),
+                map_path=map_file,
+                session=session,
+                profile_name=profile,
+                run_id=run_id,
+                grain_top_n=grain_top_n,
+            )
+        except (_ParseError, ConfigError, ValueError) as exc:
+            raise _fail(str(exc)) from exc
+        finally:
+            if session is not None:
+                session.close()
+        phase_dir = out_dir / mode
+        _write_reports(result, phase_dir)
+        try:
+            write_audit_record(result)
+        except OSError as exc:
+            err_console.print(
+                f"[yellow]warning:[/yellow] could not write audit record: {exc}"
+            )
+        console.print(f"[bold]{mode} phase[/bold]")
+        _print_summary(result, phase_dir)
+        results.append(result)
+        if mode == "snapshot" and result.verdict is Verdict.BLOCKED:
+            # An incomplete legacy capture would only re-report itself as
+            # missing snapshots in the check phase; stop and say why.
+            err_console.print(
+                "[yellow]check phase skipped:[/yellow] the snapshot phase is "
+                "BLOCKED; fix the legacy capture first."
+            )
+            break
+
+    worst = min(results, key=lambda r: _VERDICT_RANK[r.verdict])
+    raise typer.Exit(exit_code_for_verdict(worst.verdict, ruleset.defaults.fail_on))
+
+
+@parity_app.command("estate")
+def parity_estate(
+    manifest: str = typer.Option(
+        ...,
+        "--manifest",
+        help="The migration wave: a YAML manifest file, or a glob of .twb/.twbx paths.",
+    ),
+    phase: str = typer.Option(
+        "check", "--phase", help="Estate phase: snapshot, check, or run (both-live)."
+    ),
+    map_file: Path = typer.Option(
+        None,
+        "--map",
+        help="Default old->new map for entries without their own (and for globs).",
+    ),
+    profile: str = typer.Option(None, "--profile", help="Ruleset profile overlay."),
+    rules: Path = typer.Option(None, "--rules", help="Path to a ruleset file."),
+    connection: Path = typer.Option(
+        None, "--connection", help="Connection profile for single-session phases."
+    ),
+    connection_legacy: Path = typer.Option(
+        None, "--connection-legacy", help="Legacy-side profile (snapshot sweep of run)."
+    ),
+    connection_target: Path = typer.Option(
+        None, "--connection-target", help="Target-side profile (check sweep of run)."
+    ),
+    out: Path = typer.Option(None, "--out", help="Report output directory."),
+    static_only: bool = typer.Option(
+        False, "--static-only", help="Extraction and mapping checks only; no Snowflake."
+    ),
+    grain_top_n: int = typer.Option(
+        20, "--grain-top-n", help="Grain groups compared per object (top N by count)."
+    ),
+    post_swap: bool = typer.Option(
+        False,
+        "--post-swap",
+        help="The workbooks are already swapped; invert the map (check phase only).",
+    ),
+    fail_on: str = typer.Option(
+        None,
+        "--fail-on",
+        help="Override the ruleset's fail_on gate for the exit code "
+        "(BLOCKED, REVIEW, READY_WITH_NOTES, READY).",
+    ),
+) -> None:
+    """Prove a whole migration wave in one command (PARITY-PLAN-V2 E7).
+
+    Runs the chosen parity phase over every workbook in the manifest,
+    sequentially, and rolls the verdicts up: BLOCKED if any workbook is
+    blocked or errored, REVIEW if any needs review, READY only when every
+    workbook is READY (D17). The roll-up report names every offender."""
+    from plumb.parity.estate import load_manifest, run_estate
+    from plumb.report.estate import write_estate_html, write_estate_junit
+
+    if phase not in ("snapshot", "check", "run"):
+        raise _fail(f"unsupported phase {phase!r}; use snapshot, check, or run")
+    if post_swap and phase != "check":
+        raise _fail("--post-swap applies to the check phase only")
+    if map_file is not None and not map_file.exists():
+        raise _fail(f"map file not found: {map_file}")
+    gate = fail_on
+    if gate is not None:
+        try:
+            Verdict(gate)
+        except ValueError as exc:
+            raise _fail(
+                f"unknown --fail-on verdict {gate!r}; use BLOCKED, REVIEW, "
+                "READY_WITH_NOTES, or READY"
+            ) from exc
+
+    ruleset = _resolve_ruleset(rules, profile)
+    run_id = str(uuid.uuid4())
+    try:
+        estate_manifest = load_manifest(manifest, default_map=map_file)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+
+    legacy_path = connection_legacy or connection
+    target_path = connection_target or connection
+    legacy_factory = (
+        None if static_only else (lambda: _open_session(ruleset, run_id, legacy_path))
+    )
+    target_factory = (
+        None if static_only else (lambda: _open_session(ruleset, run_id, target_path))
+    )
+    try:
+        estate, rollup = run_estate(
+            estate_manifest,
+            phase,  # type: ignore[arg-type]
+            ruleset=ruleset,
+            store=_baseline_store(),
+            legacy_session_factory=legacy_factory,
+            target_session_factory=target_factory,
+            post_swap=post_swap,
+            profile_name=profile,
+            run_id=run_id,
+            grain_top_n=grain_top_n,
+        )
+    except (ConfigError, ValueError) as exc:
+        raise _fail(str(exc)) from exc
+
+    out_dir = out or LATEST_DIR
+    _write_reports(rollup, out_dir)
+    write_estate_html(estate, out_dir / "estate.html")
+    write_estate_junit(estate, out_dir / "estate.junit.xml")
+    try:
+        write_audit_record(rollup)
+    except OSError as exc:
+        err_console.print(f"[yellow]warning:[/yellow] could not write audit record: {exc}")
+
+    _print_estate(estate)
+    _print_summary(rollup, out_dir)
+    verdict = estate.rollup or rollup.verdict
+    raise typer.Exit(exit_code_for_verdict(verdict, gate or ruleset.defaults.fail_on))
+
+
+def _print_estate(estate: object) -> None:
+    """The per-workbook roll-up table for `plumb parity estate`."""
+    from plumb.parity.contracts import EstateResult
+
+    assert isinstance(estate, EstateResult)
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Workbook")
+    table.add_column("Snapshot")
+    table.add_column("Check")
+    table.add_column("Outcome")
+    for entry in estate.entries:
+        if entry.error is not None:
+            outcome = f"[magenta]ERROR[/magenta] {entry.error}"
+        else:
+            verdict = entry.verdict
+            style = _VERDICT_STYLE.get(verdict, "") if verdict else ""
+            outcome = f"[{style}]{verdict.value}[/{style}]" if verdict else "no result"
+        table.add_row(
+            entry.workbook_path,
+            entry.snapshot_result.verdict.value if entry.snapshot_result else "-",
+            entry.check_result.verdict.value if entry.check_result else "-",
+            outcome,
+        )
+    console.print(table)
 
 
 # --- baseline -----------------------------------------------------------

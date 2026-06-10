@@ -16,14 +16,24 @@ from dataclasses import dataclass
 from typing import Any
 
 from plumb.checks._base import build_result
-from plumb.engine.models import CheckFamily, CheckResult, ExecutionType, Severity, Status
+from plumb.engine.models import (
+    CheckFamily,
+    CheckResult,
+    ExecutionType,
+    Severity,
+    Status,
+    Verdict,
+)
 from plumb.engine.registry import CheckContext, register_check
 from plumb.parity.contracts import (
+    ESTATE_EXTRAS_KEY,
     EXTRAS_KEY,
+    EstateResult,
     MappingResolution,
     ParityBundle,
     ParityMetrics,
     ResolvedObject,
+    SourceRelation,
     snapshot_name,
 )
 
@@ -214,6 +224,15 @@ def m_src_001(ctx: CheckContext, params: dict[str, Any]) -> list[CheckResult]:
     ]
 
 
+def _looks_swapped(relation: SourceRelation, bundle: ParityBundle) -> bool:
+    """True when an unmapped relation's FQN names one of the map's `new:`
+    objects — the classic signature of running a plain check against an
+    already-swapped workbook. Remediation hint only, never a status (D18)."""
+    if bundle.post_swap or relation.fqn is None:
+        return False
+    return relation.fqn.strip().upper() in bundle.map_new_fqns
+
+
 @register_check(
     check_id="M-MAP-001",
     name="Every source resolves to a target object",
@@ -228,16 +247,44 @@ def m_map_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     resolution = bundle.resolution
     if resolution is None:
         return build_result(ctx, "M-MAP-001", Status.SKIP, observed=NO_RESOLUTION)
-    if resolution.unmapped:
-        names = _named([r.fqn or r.label for r in resolution.unmapped])
+    if resolution.unmapped or resolution.uninvertible:
+        observed_parts: list[str] = []
+        remediation_parts: list[str] = []
+        if resolution.unmapped:
+            names = _named([r.fqn or r.label for r in resolution.unmapped])
+            observed_parts.append(
+                f"{len(resolution.unmapped)} unmapped source(s): {names}"
+            )
+            remediation_parts.append(
+                "Add an explicit old/new entry to the map file for each named "
+                "object, or list it under ignore. Plumb never guesses a mapping."
+            )
+            if any(_looks_swapped(r, bundle) for r in resolution.unmapped):
+                remediation_parts.append(
+                    "At least one unmapped source carries a `new:` name from the "
+                    "map — if this workbook has already been swapped, re-run "
+                    "with --post-swap instead of remapping."
+                )
+        if resolution.uninvertible:
+            names = _named(
+                [f"{r.fqn or r.label} ({reason})" for r, reason in resolution.uninvertible]
+            )
+            observed_parts.append(
+                f"{len(resolution.uninvertible)} source(s) with no derivable legacy "
+                f"identity (post-swap inversion failed): {names}"
+            )
+            remediation_parts.append(
+                "Post-swap checks invert the map (new->old), which needs every "
+                "mapped `old:` name fully qualified (DB.SCHEMA.TABLE) and unique "
+                "per `new:`. Fix the named map entries."
+            )
         return build_result(
             ctx,
             "M-MAP-001",
             Status.FAIL,
-            observed=f"{len(resolution.unmapped)} unmapped source(s): {names}",
+            observed="; ".join(observed_parts),
             expected="every eligible relation maps to a target object (or identity)",
-            remediation="Add an explicit old/new entry to the map file for each named "
-            "object, or list it under ignore. Plumb never guesses a mapping.",
+            remediation=" ".join(remediation_parts),
         )
     explicit = sum(1 for r in resolution.resolved if not r.via_identity)
     identity = sum(1 for r in resolution.resolved if r.via_identity)
@@ -301,30 +348,44 @@ def m_snap_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             Status.PASS,
             observed=f"{len(resolution.resolved)} snapshot(s) written",
         )
-    missing = [
-        snapshot_name(bundle.snapshot_prefix, r.relation)
+    missing_resolved = [
+        r
         for r in resolution.resolved
         if snapshot_name(bundle.snapshot_prefix, r.relation) not in bundle.snapshots
     ]
-    if missing:
+    if missing_resolved:
         # An unreadable snapshot (recorded in bundle.errors by the runner)
         # is named with its cause, not just as absent.
         detail = _named(
             [
                 f"{name} ({bundle.errors[name]})" if name in bundle.errors else name
-                for name in missing
+                for name in (
+                    snapshot_name(bundle.snapshot_prefix, r.relation)
+                    for r in missing_resolved
+                )
             ]
         )
+        remediation = (
+            f"run: plumb parity snapshot --workbook {bundle.workbook_path} "
+            "--profile <legacy-profile> --map <map.yml>"
+        )
+        # A missing snapshot whose relation already carries a `new:` name is
+        # the signature of checking a swapped workbook without --post-swap:
+        # re-snapshotting would capture the WRONG (target) side.
+        if any(_looks_swapped(r.relation, bundle) for r in missing_resolved):
+            remediation = (
+                "At least one relation with a missing snapshot carries a `new:` "
+                "name from the map — if this workbook has already been swapped, "
+                "re-run the check with --post-swap. Do NOT re-snapshot: that "
+                "would capture the target side as the baseline."
+            )
         return build_result(
             ctx,
             "M-SNAP-001",
             Status.FAIL,
-            observed=f"{len(missing)} missing snapshot(s): {detail}",
+            observed=f"{len(missing_resolved)} missing snapshot(s): {detail}",
             expected="a legacy snapshot per resolved relation",
-            remediation=(
-                f"run: plumb parity snapshot --workbook {bundle.workbook_path} "
-                "--profile <legacy-profile> --map <map.yml>"
-            ),
+            remediation=remediation,
         )
     return build_result(
         ctx,
@@ -830,4 +891,134 @@ def m_grain_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
         "M-GRAIN-001",
         Status.PASS,
         observed=f"grain groups match for {compared} object(s) ({caveat})",
+    )
+
+
+# --- estate roll-up (PARITY-PLAN-V2 E7, S7.2) -----------------------------
+#
+# Two checks express the D17 roll-up through the engine's verdict rules, so
+# compute_verdict stays the only verdict logic: M-ESTATE-001 (BLOCKER) fails
+# when any workbook is BLOCKED or errored -> estate BLOCKED; M-ESTATE-002
+# (HIGH) fails when any workbook is REVIEW -> estate REVIEW, and WARNs when
+# any workbook is READY_WITH_NOTES -> estate READY_WITH_NOTES. All READY
+# leaves both passing -> estate READY.
+
+NO_ESTATE = "no estate result (not an estate run)"
+EMPTY_ESTATE = "empty estate: no workbooks ran"
+
+
+def _estate(ctx: CheckContext) -> EstateResult | None:
+    """The shared guard: every M-ESTATE-* check SKIPs outside estate runs."""
+    candidate = ctx.extras.get(ESTATE_EXTRAS_KEY) if ctx.extras else None
+    if not isinstance(candidate, EstateResult):
+        return None
+    return candidate
+
+
+@register_check(
+    check_id="M-ESTATE-001",
+    name="No workbook in the estate is blocked or errored",
+    family=CheckFamily.MIGRATION_PARITY,
+    default_severity=Severity.BLOCKER,
+    execution_type=ExecutionType.STATIC,
+)
+def m_estate_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+    estate = _estate(ctx)
+    if estate is None:
+        return build_result(ctx, "M-ESTATE-001", Status.SKIP, observed=NO_ESTATE)
+    if not estate.entries:
+        # load_manifest refuses empty manifests, so this is defensive: an
+        # estate that proved nothing must never read as an unqualified pass.
+        return build_result(
+            ctx,
+            "M-ESTATE-001",
+            Status.WARN,
+            observed=EMPTY_ESTATE,
+            expected="at least one workbook in the estate",
+        )
+    offenders: list[str] = []
+    evidence: list[dict[str, Any]] = []
+    for entry in estate.entries:
+        if entry.error is not None or entry.verdict is None:
+            offenders.append(f"{entry.workbook_path} (error: {entry.error or 'no result'})")
+            evidence.append(
+                {
+                    "workbook": entry.workbook_path,
+                    "verdict": None,
+                    "error": entry.error or "no result",
+                }
+            )
+        elif entry.verdict is Verdict.BLOCKED:
+            offenders.append(f"{entry.workbook_path} (BLOCKED)")
+            evidence.append(
+                {"workbook": entry.workbook_path, "verdict": "BLOCKED", "error": None}
+            )
+    if offenders:
+        return build_result(
+            ctx,
+            "M-ESTATE-001",
+            Status.FAIL,
+            observed=(
+                f"{len(offenders)} of {len(estate.entries)} workbook(s) blocked "
+                f"or errored: {_named(offenders)}"
+            ),
+            expected="no workbook in the estate blocked or errored",
+            evidence_rows=evidence[:_DETAIL_CAP],
+            remediation="Open each named workbook's own parity report for the failing "
+            "M-* checks; the estate verdict clears when every workbook does. The "
+            "team may decide to migrate anyway — Plumb names the risk, it does "
+            "not decide (D17).",
+        )
+    return build_result(
+        ctx,
+        "M-ESTATE-001",
+        Status.PASS,
+        observed=f"{len(estate.entries)} workbook(s), none blocked or errored",
+    )
+
+
+@register_check(
+    check_id="M-ESTATE-002",
+    name="No workbook in the estate needs review",
+    family=CheckFamily.MIGRATION_PARITY,
+    default_severity=Severity.HIGH,
+    execution_type=ExecutionType.STATIC,
+)
+def m_estate_002(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+    estate = _estate(ctx)
+    if estate is None:
+        return build_result(ctx, "M-ESTATE-002", Status.SKIP, observed=NO_ESTATE)
+    if not estate.entries:
+        # M-ESTATE-001 already WARNs for the empty estate; one note suffices.
+        return build_result(ctx, "M-ESTATE-002", Status.SKIP, observed=EMPTY_ESTATE)
+    review = [e.workbook_path for e in estate.entries if e.verdict is Verdict.REVIEW]
+    notes = [
+        e.workbook_path for e in estate.entries if e.verdict is Verdict.READY_WITH_NOTES
+    ]
+    if review:
+        return build_result(
+            ctx,
+            "M-ESTATE-002",
+            Status.FAIL,
+            observed=f"{len(review)} workbook(s) at REVIEW: {_named(review)}",
+            expected="every workbook READY or READY_WITH_NOTES",
+            evidence_rows=[{"workbook": w, "verdict": "REVIEW"} for w in review][
+                :_DETAIL_CAP
+            ],
+            remediation="Each named workbook has HIGH-severity parity findings (or "
+            "errored high-stakes checks); review its own report before the wave ships.",
+        )
+    if notes:
+        return build_result(
+            ctx,
+            "M-ESTATE-002",
+            Status.WARN,
+            observed=f"{len(notes)} workbook(s) READY_WITH_NOTES: {_named(notes)}",
+            expected="every workbook READY",
+        )
+    return build_result(
+        ctx,
+        "M-ESTATE-002",
+        Status.PASS,
+        observed=f"{len(estate.entries)} workbook(s), none need review",
     )
