@@ -8,6 +8,7 @@ import { ChecksEditor, CustomChecksEditor } from "./Customize";
 import { BuildSetup } from "./BuildSetup";
 import { HistoryModal, RecentRuns } from "./History";
 import { LineageMap } from "./Lineage";
+import { MigrationView } from "./Migration";
 import { Settings } from "./Settings";
 import { Report } from "./Report";
 import { Drawer, Segmented, SwitchRow } from "./ui";
@@ -60,6 +61,13 @@ FROM combined c
 LEFT JOIN supplier_health sh ON c.customer_region = sh.supplier_region,
      brand_margin bm`;
 
+// The SQL view's catalog. An exclusion filter ("everything that is not
+// tableau") silently absorbed the migration_parity family when it was
+// added, inflating the enabled count with checks the engine then (rightly)
+// never ran for a sql target - "Run 39 checks" produced 27 results.
+// Families are allow-listed per view; migration parity has its own view.
+const SQL_FAMILIES = new Set(["static", "metadata", "assertions", "regression", "performance"]);
+
 interface Preset { id: string; label: string; rules: string; mode?: "all" | "static"; }
 const PRESETS: Preset[] = [
   { id: "recommended", label: "Recommended", rules: "plumb" },
@@ -80,7 +88,7 @@ function useHistory(): { runs: HistoryRun[]; total: number; refresh: () => void 
 
 export function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [tab, setTab] = useState<"sql" | "tableau">("sql");
+  const [tab, setTab] = useState<"sql" | "tableau" | "migration">("sql");
   const [conn, setConn] = useState<Connection>({ configured: false });
   const [profiles, setProfiles] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<CatalogCheck[]>([]);
@@ -137,11 +145,17 @@ export function App() {
         <p className="sub">Run trusted checks on a SQL build or a Tableau workbook in seconds.</p>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
           <Segmented value={tab} onChange={setTab}
-            options={[{ value: "sql", label: "SQL" }, { value: "tableau", label: "Tableau" }]} />
+            options={[
+              { value: "sql", label: "SQL" },
+              { value: "tableau", label: "Tableau" },
+              { value: "migration", label: "Migration" },
+            ]} />
         </div>
         {tab === "sql"
           ? <SqlView conn={conn} profiles={profiles} catalog={catalog} />
-          : <TableauView profiles={profiles} catalog={catalog} />}
+          : tab === "tableau"
+            ? <TableauView profiles={profiles} catalog={catalog} />
+            : <MigrationView conn={conn} />}
       </div>
     </>
   );
@@ -174,7 +188,7 @@ function applyPreset(preset: Preset, catalog: CatalogCheck[], seed: CheckState[]
   const fromRuleset = new Map(seed.map((c) => [c.id, c]));
   const next: Record<string, CheckState> = {};
   for (const c of catalog) {
-    if (c.family.startsWith("tableau")) continue;
+    if (!SQL_FAMILIES.has(c.family)) continue;
     let enabled: boolean;
     if (preset.mode === "all") enabled = true;
     else if (preset.mode === "static") enabled = c.family === "static";
@@ -201,7 +215,7 @@ function SqlView({ conn, profiles, catalog }: { conn: Connection; profiles: stri
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
-  const sqlCatalog = useMemo(() => catalog.filter((c) => !c.family.startsWith("tableau")), [catalog]);
+  const sqlCatalog = useMemo(() => catalog.filter((c) => SQL_FAMILIES.has(c.family)), [catalog]);
   const standardLabel = standard || "Standard";
 
   useEffect(() => { setLive(conn.configured); }, [conn.configured]);

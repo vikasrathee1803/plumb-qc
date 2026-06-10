@@ -3,9 +3,26 @@ import type {
   SnowflakeSettings, TableauSettings, TestResult, Trend,
 } from "./types";
 
+// A stale session cookie (a previous `plumb web` launch, or a cached SPA
+// shell) makes every API call 401. Before this guard those failures were
+// swallowed silently, so the app rendered as "no connection" with zero
+// checks and a disabled Run button while the server was perfectly healthy.
+// Reloading the shell re-issues the cookie; do it once, then surface the
+// error so a real auth problem cannot loop the page.
+const RELOAD_FLAG = "plumb_auth_reloaded";
+function handleAuthExpired(): never {
+  if (!sessionStorage.getItem(RELOAD_FLAG)) {
+    sessionStorage.setItem(RELOAD_FLAG, "1");
+    window.location.reload();
+  }
+  throw new Error("Session expired - reload the page.");
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url);
+  if (r.status === 401) handleAuthExpired();
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  sessionStorage.removeItem(RELOAD_FLAG);
   return r.json() as Promise<T>;
 }
 
@@ -15,8 +32,10 @@ async function sendJSON<T>(url: string, method: string, body?: unknown): Promise
     headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  if (r.status === 401) handleAuthExpired();
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as { detail?: string }).detail ?? `${url}: ${r.status}`);
+  sessionStorage.removeItem(RELOAD_FLAG);
   return j as T;
 }
 
@@ -89,6 +108,37 @@ export async function runSql(body: {
   return j as RunResult;
 }
 
+export interface ParityRunResponse {
+  results: RunResult[];
+  stopped_after_snapshot: boolean;
+}
+
+export async function runParity(
+  file: File,
+  map: File | null,
+  opts: { mode: "snapshot" | "check" | "run"; static_only: boolean; post_swap: boolean }
+): Promise<ParityRunResponse> {
+  const form = new FormData();
+  form.append("workbook", file);
+  if (map) form.append("map_file", map);
+  form.append("mode", opts.mode);
+  form.append("static_only", String(opts.static_only));
+  form.append("post_swap", String(opts.post_swap));
+  let r: Response;
+  try {
+    r = await fetch("/api/parity/run", { method: "POST", body: form });
+  } catch {
+    throw new Error(
+      "Could not reach the server. The workbook may be too large, or your session " +
+        "expired - reload the page and try again."
+    );
+  }
+  if (r.status === 401) handleAuthExpired();
+  const j = await r.json().catch(() => ({}) as { detail?: string });
+  if (!r.ok) throw new Error((j as { detail?: string }).detail ?? "parity run failed");
+  return j as ParityRunResponse;
+}
+
 export async function runTableau(
   file: File,
   profile: string | null,
@@ -107,7 +157,7 @@ export async function runTableau(
         "expired - reload the page and try again."
     );
   }
-  if (r.status === 401) throw new Error("Session expired. Reload the page and try again.");
+  if (r.status === 401) handleAuthExpired();
   const j = await r.json().catch(() => ({}) as { detail?: string });
   if (!r.ok) throw new Error((j as { detail?: string }).detail ?? "check failed");
   return j as RunResult;

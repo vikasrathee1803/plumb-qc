@@ -4,6 +4,7 @@ import type { About } from "./types";
 const FAMILY_LABEL: Record<string, string> = {
   static: "Static", metadata: "Metadata", assertions: "Assertions",
   regression: "Regression", performance: "Performance", tableau_static: "Tableau",
+  tableau_live: "Tableau live", migration_parity: "Migration parity",
 };
 const VERDICT_LABEL: Record<string, string> = {
   BLOCKED: "Blocked", REVIEW: "Review", READY_WITH_NOTES: "Ready, notes", READY: "Ready",

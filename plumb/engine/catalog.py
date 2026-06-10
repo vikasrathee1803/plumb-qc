@@ -67,6 +67,7 @@ PARAM_HINTS: dict[str, list[dict[str, Any]]] = {
     ],
     "T-RLS-001": [{"name": "required", "type": "bool"}],
     "T-FILT-001": [{"name": "max_filters", "type": "int"}],
+    "M-ROW-001": [{"name": "tolerance_pct", "type": "float"}],
 }
 
 # One-line descriptions for the catalog. Falls back to the registered name.
@@ -86,6 +87,18 @@ DESCRIPTIONS: dict[str, str] = {
     "D-POS-001": "Declared numeric columns have no negative values.",
     "D-DISTINCT-001": "Distinct value count within expected bounds.",
     "R-DIFF-001": "Row and aggregate diff against a saved baseline.",
+    "M-SRC-001": "Workbook datasources decompose to provable Snowflake relations.",
+    "M-MAP-001": "Every source resolves to a target object via the map (or identity).",
+    "M-SNAP-001": "A legacy snapshot exists for every resolved source.",
+    "M-SCHEMA-001": "Target objects carry the snapshot's columns with compatible types.",
+    "M-ROW-001": "Row counts match the legacy snapshot within tolerance.",
+    "M-AGG-001": "SUM/MIN/MAX match the snapshot per numeric column.",
+    "M-NULL-001": "Per-column null counts match, relative to table size.",
+    "M-DIST-001": "COUNT DISTINCT matches on the map's declared keys.",
+    "M-GRAIN-001": "Grouped row counts match per declared grain.",
+    "M-HASH-001": "Per-row fingerprints match on keyed objects (cell-level drift).",
+    "M-ESTATE-001": "Estate roll-up: no workbook in the wave is blocked or errored.",
+    "M-ESTATE-002": "Estate roll-up: no workbook in the wave needs review.",
 }
 
 

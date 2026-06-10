@@ -4,10 +4,12 @@ import type { CatalogCheck, CheckState, CustomCheck, ParamHint } from "./types";
 
 const FAMILY_ORDER = [
   "static", "metadata", "assertions", "regression", "performance", "tableau_static",
+  "tableau_live", "migration_parity",
 ];
 const FAMILY_LABEL: Record<string, string> = {
   static: "Static analysis", metadata: "Schema & metadata", assertions: "Data assertions",
   regression: "Regression vs baseline", performance: "Performance & cost", tableau_static: "Tableau",
+  tableau_live: "Tableau (live)", migration_parity: "Migration parity",
 };
 const SEVERITIES = ["BLOCKER", "HIGH", "MEDIUM", "LOW", "INFO"];
 

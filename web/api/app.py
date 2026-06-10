@@ -833,6 +833,104 @@ def create_app() -> FastAPI:
         _record(result)
         return result.model_dump(mode="json")
 
+    @app.post("/api/parity/run")
+    async def parity_run(
+        workbook: UploadFile = File(...),
+        map_file: UploadFile | None = File(None),
+        mode: str = Form("check"),
+        static_only: bool = Form(False),
+        post_swap: bool = Form(False),
+        hash_cap: int = Form(1000),
+        grain_top_n: int = Form(20),
+        profile: str | None = Form(None),
+    ) -> dict[str, Any]:
+        """Migration parity from the browser: snapshot, check, or both-live
+        on one workbook, via the same run_parity the CLI uses. The workbook
+        keeps its ORIGINAL file name inside a temp directory — the snapshot
+        prefix derives from the file stem, so a random temp name would
+        orphan every snapshot between phases (and from CLI runs of the same
+        workbook). Estate/bulk waves stay on the CLI (plumb parity estate)."""
+        from plumb.parity.runner import run_parity
+
+        if mode not in ("snapshot", "check", "run"):
+            raise HTTPException(
+                status_code=400, detail=f"unknown parity mode {mode!r}; use snapshot, check, or run"
+            )
+        if post_swap and mode != "check":
+            raise HTTPException(status_code=400, detail="post_swap applies to the check phase only")
+        if static_only and mode == "run":
+            raise HTTPException(
+                status_code=400,
+                detail="static_only cannot run both phases: a static snapshot writes "
+                "no baselines, so the check phase would always block",
+            )
+        ruleset = _resolve_ruleset(profile)
+        cfg = load_baseline_store_config()
+        store = make_baseline_store(cfg.kind, Path(cfg.path) if cfg.path else None)
+
+        # Path(...).name strips any client-supplied directories (traversal guard);
+        # the stem itself must survive because snapshot identity hangs off it.
+        wb_name = Path(workbook.filename or "workbook.twb").name or "workbook.twb"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            wb_path = Path(tmp_dir) / wb_name
+            size = 0
+            with wb_path.open("wb") as out:
+                while True:
+                    chunk = await workbook.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > _MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"upload exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+                        )
+                    out.write(chunk)
+            map_path: Path | None = None
+            if map_file is not None and map_file.filename:
+                map_bytes = await map_file.read()
+                if len(map_bytes) > 1024 * 1024:
+                    raise HTTPException(status_code=400, detail="map file exceeds 1 MB")
+                map_path = Path(tmp_dir) / (Path(map_file.filename).name or "map.yml")
+                map_path.write_bytes(map_bytes)
+
+            phases = ["snapshot", "check"] if mode == "run" else [mode]
+            results: list[RunResult] = []
+            stopped_after_snapshot = False
+            for phase in phases:
+                run_id = str(uuid.uuid4())
+                session = None if static_only else _open_session(ruleset, run_id)
+                try:
+                    result = run_parity(
+                        workbook=wb_path,
+                        mode=phase,  # type: ignore[arg-type]
+                        ruleset=ruleset,
+                        store=store,
+                        map_path=map_path,
+                        session=session,
+                        profile_name=profile,
+                        run_id=run_id,
+                        grain_top_n=grain_top_n,
+                        hash_cap=hash_cap,
+                        post_swap=post_swap and phase == "check",
+                    )
+                except (TableauParseError, ConfigError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                finally:
+                    if session is not None:
+                        session.close()
+                _record(result)
+                results.append(result)
+                if phase == "snapshot" and mode == "run" and result.verdict.value == "BLOCKED":
+                    # Mirrors the CLI: an incomplete legacy capture would only
+                    # re-report itself as missing snapshots in the check phase.
+                    stopped_after_snapshot = True
+                    break
+        return {
+            "results": [r.model_dump(mode="json") for r in results],
+            "stopped_after_snapshot": stopped_after_snapshot,
+        }
+
     @app.get("/api/history")
     def history(limit: int = 25, q: str | None = None) -> dict[str, Any]:
         """Runs, most recent first. limit caps the page; q filters by target

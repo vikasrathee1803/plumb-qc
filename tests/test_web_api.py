@@ -533,3 +533,99 @@ def test_root_serves_something():
     # Either the built SPA or the build-me placeholder; never a 500.
     r = client.get("/")
     assert r.status_code == 200
+
+
+# --- migration parity endpoint (web review W1) -----------------------------
+
+
+def _parity_files(tmp_path, map_text=None):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from _parity_fixtures import TWB_CUSTOM_SQL
+
+    wb = tmp_path / "kpi.twb"
+    wb.write_text(TWB_CUSTOM_SQL, encoding="utf-8")
+    files = {"workbook": ("kpi.twb", wb.read_bytes(), "application/octet-stream")}
+    if map_text is not None:
+        files["map_file"] = ("map.yml", map_text.encode("utf-8"), "text/yaml")
+    return files
+
+
+def test_parity_static_snapshot_returns_m_checks(tmp_path):
+    r = client.post(
+        "/api/parity/run",
+        files=_parity_files(tmp_path),
+        data={"mode": "snapshot", "static_only": "true"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["results"]) == 1
+    result = body["results"][0]
+    ids = {c["id"] for c in result["checks"]}
+    assert "M-SRC-001" in ids
+    assert result["target"]["type"] == "parity"
+    assert body["stopped_after_snapshot"] is False
+
+
+def test_parity_workbook_keeps_its_filename_for_snapshot_identity(tmp_path):
+    """The snapshot prefix derives from the workbook file stem; the upload
+    must keep its original name or every phase orphans its snapshots."""
+    r = client.post(
+        "/api/parity/run",
+        files=_parity_files(tmp_path),
+        data={"mode": "snapshot", "static_only": "true"},
+    )
+    assert r.status_code == 200
+    source_ref = r.json()["results"][0]["target"]["source_ref"]
+    assert source_ref.endswith("kpi.twb")
+
+
+def test_parity_mode_validation():
+    r = client.post(
+        "/api/parity/run",
+        files={"workbook": ("kpi.twb", b"<x/>", "application/octet-stream")},
+        data={"mode": "estate"},
+    )
+    assert r.status_code == 400
+    assert "unknown parity mode" in r.json()["detail"]
+
+
+def test_parity_post_swap_only_on_check(tmp_path):
+    r = client.post(
+        "/api/parity/run",
+        files=_parity_files(tmp_path),
+        data={"mode": "snapshot", "static_only": "true", "post_swap": "true"},
+    )
+    assert r.status_code == 400
+    assert "check phase only" in r.json()["detail"]
+
+
+def test_parity_run_mode_refuses_static_only(tmp_path):
+    r = client.post(
+        "/api/parity/run",
+        files=_parity_files(tmp_path),
+        data={"mode": "run", "static_only": "true"},
+    )
+    assert r.status_code == 400
+    assert "static" in r.json()["detail"]
+
+
+def test_parity_bad_map_is_loud_400(tmp_path):
+    r = client.post(
+        "/api/parity/run",
+        files=_parity_files(tmp_path, map_text="version: 1\nnonsense_key: true\n"),
+        data={"mode": "snapshot", "static_only": "true"},
+    )
+    assert r.status_code == 400
+    assert "invalid parity map" in r.json()["detail"]
+
+
+def test_parity_run_lands_in_history(tmp_path):
+    client.post(
+        "/api/parity/run",
+        files=_parity_files(tmp_path),
+        data={"mode": "snapshot", "static_only": "true"},
+    )
+    runs = client.get("/api/history").json()["runs"]
+    assert any(run["type"] == "parity" for run in runs)
