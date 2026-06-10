@@ -62,8 +62,18 @@ def _bundle(ctx: CheckContext) -> ParityBundle | None:
     return candidate
 
 
-def _no_bundle_skip(ctx: CheckContext, check_id: str) -> CheckResult:
-    return build_result(ctx, check_id, Status.SKIP, observed=NO_BUNDLE)
+def _no_bundle_outcome(ctx: CheckContext, check_id: str) -> list[CheckResult]:
+    """No parity bundle in extras. Inside an estate roll-up run that is NOT
+    a coverage gap — every per-workbook M-* check already ran inside the
+    sweeps — so a SKIP here would read as nine phantom capability gaps in
+    the roll-up report (cycle-1 finding). Emit nothing there, the same
+    stance as the runner's family filtering ("coverage stays focused");
+    keep the visible SKIP guard everywhere else."""
+    if isinstance(
+        ctx.extras.get(ESTATE_EXTRAS_KEY) if ctx.extras else None, EstateResult
+    ):
+        return []
+    return [build_result(ctx, check_id, Status.SKIP, observed=NO_BUNDLE)]
 
 
 def _named(items: list[str]) -> str:
@@ -176,7 +186,7 @@ def m_src_001(ctx: CheckContext, params: dict[str, Any]) -> list[CheckResult]:
     reason (coverage honesty, PARITY-PLAN S4.2)."""
     bundle = _bundle(ctx)
     if bundle is None:
-        return [_no_bundle_skip(ctx, "M-SRC-001")]
+        return _no_bundle_outcome(ctx, "M-SRC-001")
     eligible = [r for r in bundle.relations if r.kind in ("table", "custom_sql")]
     refused = [r for r in bundle.relations if r.kind == "refused"]
     if not eligible:
@@ -240,10 +250,12 @@ def _looks_swapped(relation: SourceRelation, bundle: ParityBundle) -> bool:
     default_severity=Severity.BLOCKER,
     execution_type=ExecutionType.STATIC,
 )
-def m_map_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_map_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-MAP-001")
+        return _no_bundle_outcome(ctx, "M-MAP-001")
     resolution = bundle.resolution
     if resolution is None:
         return build_result(ctx, "M-MAP-001", Status.SKIP, observed=NO_RESOLUTION)
@@ -303,10 +315,12 @@ def m_map_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     default_severity=Severity.BLOCKER,
     execution_type=ExecutionType.STATIC,
 )
-def m_snap_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_snap_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-SNAP-001")
+        return _no_bundle_outcome(ctx, "M-SNAP-001")
     resolution = bundle.resolution
     if resolution is None:
         return build_result(ctx, "M-SNAP-001", Status.SKIP, observed=NO_RESOLUTION)
@@ -414,10 +428,12 @@ def m_snap_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     default_severity=Severity.BLOCKER,
     execution_type=ExecutionType.EXECUTION,
 )
-def m_schema_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_schema_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-SCHEMA-001")
+        return _no_bundle_outcome(ctx, "M-SCHEMA-001")
     gate = _value_phase_skip(ctx, "M-SCHEMA-001", bundle)
     if gate is not None:
         return gate
@@ -506,10 +522,12 @@ def m_schema_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     default_severity=Severity.BLOCKER,
     execution_type=ExecutionType.EXECUTION,
 )
-def m_row_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_row_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-ROW-001")
+        return _no_bundle_outcome(ctx, "M-ROW-001")
     gate = _value_phase_skip(ctx, "M-ROW-001", bundle)
     if gate is not None:
         return gate
@@ -569,10 +587,12 @@ def m_row_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     default_severity=Severity.HIGH,
     execution_type=ExecutionType.EXECUTION,
 )
-def m_agg_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_agg_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-AGG-001")
+        return _no_bundle_outcome(ctx, "M-AGG-001")
     gate = _value_phase_skip(ctx, "M-AGG-001", bundle)
     if gate is not None:
         return gate
@@ -649,10 +669,12 @@ def m_agg_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     default_severity=Severity.HIGH,
     execution_type=ExecutionType.EXECUTION,
 )
-def m_null_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_null_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-NULL-001")
+        return _no_bundle_outcome(ctx, "M-NULL-001")
     gate = _value_phase_skip(ctx, "M-NULL-001", bundle)
     if gate is not None:
         return gate
@@ -721,10 +743,12 @@ def m_null_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     default_severity=Severity.HIGH,
     execution_type=ExecutionType.EXECUTION,
 )
-def m_dist_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_dist_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-DIST-001")
+        return _no_bundle_outcome(ctx, "M-DIST-001")
     gate = _value_phase_skip(ctx, "M-DIST-001", bundle)
     if gate is not None:
         return gate
@@ -812,10 +836,12 @@ def _grain_counts(metrics: ParityMetrics) -> dict[str, int]:
     default_severity=Severity.HIGH,
     execution_type=ExecutionType.EXECUTION,
 )
-def m_grain_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_grain_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     bundle = _bundle(ctx)
     if bundle is None:
-        return _no_bundle_skip(ctx, "M-GRAIN-001")
+        return _no_bundle_outcome(ctx, "M-GRAIN-001")
     gate = _value_phase_skip(ctx, "M-GRAIN-001", bundle)
     if gate is not None:
         return gate
@@ -931,6 +957,17 @@ def _estate(ctx: CheckContext) -> EstateResult | None:
     return candidate
 
 
+def _no_estate_outcome(ctx: CheckContext, check_id: str) -> list[CheckResult]:
+    """No estate result in extras. In a single-workbook parity run the
+    roll-up checks are meaningless rather than skipped risk, so they emit
+    nothing instead of stamping "no estate result" into every check and
+    snapshot coverage caption (cycle-1 finding). The visible SKIP guard
+    stays for runs with no parity context at all."""
+    if isinstance(ctx.extras.get(EXTRAS_KEY) if ctx.extras else None, ParityBundle):
+        return []
+    return [build_result(ctx, check_id, Status.SKIP, observed=NO_ESTATE)]
+
+
 @register_check(
     check_id="M-ESTATE-001",
     name="No workbook in the estate is blocked or errored",
@@ -938,10 +975,12 @@ def _estate(ctx: CheckContext) -> EstateResult | None:
     default_severity=Severity.BLOCKER,
     execution_type=ExecutionType.STATIC,
 )
-def m_estate_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_estate_001(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     estate = _estate(ctx)
     if estate is None:
-        return build_result(ctx, "M-ESTATE-001", Status.SKIP, observed=NO_ESTATE)
+        return _no_estate_outcome(ctx, "M-ESTATE-001")
     if not estate.entries:
         # load_manifest refuses empty manifests, so this is defensive: an
         # estate that proved nothing must never read as an unqualified pass.
@@ -1002,10 +1041,12 @@ def m_estate_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     default_severity=Severity.HIGH,
     execution_type=ExecutionType.STATIC,
 )
-def m_estate_002(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
+def m_estate_002(
+    ctx: CheckContext, params: dict[str, Any]
+) -> CheckResult | list[CheckResult]:
     estate = _estate(ctx)
     if estate is None:
-        return build_result(ctx, "M-ESTATE-002", Status.SKIP, observed=NO_ESTATE)
+        return _no_estate_outcome(ctx, "M-ESTATE-002")
     if not estate.entries:
         # M-ESTATE-001 already WARNs for the empty estate; one note suffices.
         return build_result(ctx, "M-ESTATE-002", Status.SKIP, observed=EMPTY_ESTATE)

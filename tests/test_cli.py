@@ -136,3 +136,16 @@ def test_cli_threads_run_id_into_query_tag(tmp_path: Path, monkeypatch):
 def test_report_open_without_report_exits_3(tmp_path: Path):
     result = runner.invoke(app, ["report", "open", "--path", str(tmp_path)])
     assert result.exit_code == 3
+
+
+def test_query_file_with_utf8_bom_is_accepted(tmp_path: Path):
+    """Cycle-2 fix: PowerShell, SSMS, and VS Code routinely write .sql files
+    with a UTF-8 BOM; the BOM must never reach the SQL parser (it produced a
+    baffling 'Invalid expression' exit 3 on a perfectly good query)."""
+    query = tmp_path / "bom.sql"
+    query.write_bytes(b"\xef\xbb\xbf" + b"SELECT a, b FROM db.sch.t WHERE a > 0")
+    result = runner.invoke(
+        app,
+        ["check", "sql", "--query", str(query), "--rules", str(RULES), "--static-only"],
+    )
+    assert result.exit_code == 0, result.output

@@ -5,21 +5,28 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Download](https://img.shields.io/badge/download-Windows%20portable-2ea44f.svg)](https://github.com/vikasrathee1803/plumb-qc/releases/latest)
 
-A local-first, centrally governed QC and confidence engine. Plumb lets a
-BI analyst prove a Snowflake SQL build or a Tableau workbook is correct
-before it ships, and produces a shareable confidence report.
+The BI team's pre-publish QC gate. Plumb is one local-first, centrally
+governed tool that proves a BI artifact is correct **before** it ships —
+and produces a shareable confidence report with a deterministic verdict.
 
 ![Plumb catching a cross-join fan-out before it ships](docs/screenshot.png)
 
-## What it does
+## One tool, three jobs
 
-- Runs deterministic checks against your SQL: static analysis, schema and
-  metadata validation, data assertions (grain, nulls, referential
-  integrity, freshness, reconciliation), regression diff against a saved
-  baseline, and performance smells.
-- Produces a tiered verdict: BLOCKED, REVIEW, READY_WITH_NOTES, or READY,
-  with an honest coverage statement of what ran and what was skipped.
-- Writes a self-contained HTML report, JSON, and JUnit XML for CI.
+Everything a BI team publishes goes through the same engine, the same
+ruleset, the same verdict tiers (BLOCKED / REVIEW / READY_WITH_NOTES /
+READY), and the same HTML + JSON + JUnit reports:
+
+| Job | Command | Catches |
+|---|---|---|
+| **SQL build QC** | `plumb check sql --query build.sql` | cross-join fan-out, grain breaks, null drift, referential gaps, freshness misses, regression vs a golden baseline, cost smells |
+| **Workbook QC** | `plumb check tableau --workbook dash.twbx` | risky FIXED LODs, grain-mismatched calcs, uncertified/extract sources, naming and hygiene issues |
+| **Migration parity** | `plumb parity snapshot` / `check` / `estate` | a re-pointed workbook silently showing different numbers on the new warehouse — proven object by object, wave by wave |
+
+Where Plumb sits in the stack: dbt tests / Great Expectations / Soda guard
+the *pipeline*; Plumb guards the **last mile** — the SQL build and the
+workbook a human is about to publish, and the cut-over when an estate
+moves warehouses. It complements pipeline testing, it does not replace it.
 
 ## Install
 
@@ -27,16 +34,35 @@ before it ships, and produces a shareable confidence report.
 pipx install plumb        # from the internal package index
 ```
 
-## Quick start (Phase 1 surface)
+## Quick start
 
 ```
 plumb init                                   # scaffold connection profile
 plumb rules pin 2026.06.0                    # pin the team standard
 plumb check sql --query daily_sales.sql --profile finance
+plumb check tableau --workbook daily_sales.twbx
 plumb report open
 ```
 
 Exit codes for CI: 0 passing, 1 REVIEW, 2 BLOCKED, 3 tool error.
+
+## CI gate in five lines
+
+Every command writes `report.junit.xml` and exits per the contract above,
+so any CI runner can gate a merge or a publish:
+
+```yaml
+# .github/workflows/bi-qc.yml (step)
+- run: plumb check sql --query builds/daily_sales.sql --static-only --out qc
+- uses: actions/upload-artifact@v4
+  if: always()
+  with: { name: plumb-report, path: qc/ }
+```
+
+Use `--static-only` for connectionless PR checks; give CI a key-pair
+profile for live metadata/assertion coverage. `plumb parity estate`
+additionally writes `estate.junit.xml` with one test case per workbook —
+a migration wave shows up in CI as N named red or green rows.
 
 ## Guarantees
 

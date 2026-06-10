@@ -772,7 +772,10 @@ def _load_target(query: Path | None, inline: str | None) -> tuple[str, Target]:
     if query:
         if not query.exists():
             raise _fail(f"query file not found: {query}")
-        return query.read_text(encoding="utf-8"), Target(
+        # utf-8-sig: Windows tooling (PowerShell, SSMS, VS Code) routinely
+        # writes .sql files with a BOM, which otherwise reaches the SQL
+        # parser as ﻿ and fails with a baffling syntax error.
+        return query.read_text(encoding="utf-8-sig"), Target(
             type="sql", name=query.stem, source_ref=str(query)
         )
     if inline:
@@ -897,7 +900,7 @@ def _do_baseline(
 ) -> None:
     if not query.exists():
         raise _fail(f"query file not found: {query}")
-    sql_text = query.read_text(encoding="utf-8")
+    sql_text = query.read_text(encoding="utf-8-sig")
     ruleset = _resolve_ruleset(rules, profile)
     session = _open_session(ruleset, str(uuid.uuid4()))
     try:

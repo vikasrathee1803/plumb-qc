@@ -92,8 +92,19 @@ class TestCatalog:
         assert res.status is Status.WARN
         assert "Raw Orders Extract" in (res.observed or "")
 
-    def test_uncertified_source_is_high_fail(self, workbook):
+    def test_uncertified_source_warns_when_no_list_configured(self, workbook):
+        """Cycle-2 consistency fix: with no certified_sources configured the
+        check cannot fully assert governance, so it WARNs (note, not REVIEW)
+        — mirroring S-META-004, which skips when unconfigured. A HIGH fail
+        on every unconfigured team's first run is alert fatigue, not QC."""
         res = t_src_003(_ctx(workbook), {})
+        assert res.status is Status.WARN
+        assert "Raw Orders Extract" in (res.observed or "")
+        assert "certified_sources" in (res.remediation or "")
+
+    def test_uncertified_source_is_high_fail_when_list_configured(self, workbook):
+        ruleset = Ruleset(version="1", certified_sources=["Some Other Source"])
+        res = t_src_003(_ctx(workbook, ruleset), {})
         assert res.status is Status.FAIL
         assert res.severity is Severity.HIGH
         assert "Raw Orders Extract" in (res.observed or "")

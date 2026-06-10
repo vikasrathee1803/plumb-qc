@@ -85,6 +85,22 @@ def t_src_003(ctx: CheckContext, params: dict):
         if not ds.is_published and ds.caption.upper() not in certified
     ]
     if uncertified:
+        # Without a configured certification list this check cannot fully
+        # assert governance — a hard HIGH fail on every unconfigured team's
+        # first run is alert fatigue, not QC (and the SQL-side counterpart
+        # S-META-004 skips when unconfigured). WARN until the team declares
+        # certified_sources; with a list configured, the gate is hard.
+        if not certified:
+            return build_result(
+                ctx, "T-SRC-003", Status.WARN,
+                observed=(
+                    f"non-published source(s): {', '.join(uncertified)} "
+                    "(no certified_sources configured)"
+                ),
+                expected="every data source is published or certified",
+                remediation="Publish the sources, or declare certified_sources in the "
+                "ruleset to make this a hard gate.",
+            )
         return build_result(
             ctx, "T-SRC-003", Status.FAIL,
             observed=f"non-published, non-certified source(s): {', '.join(uncertified)}",

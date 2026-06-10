@@ -836,22 +836,34 @@ class TestEstateChecks:
     def test_outside_estate_runs_skips(self, fn):
         import plumb.checks.parity as checks
 
-        res = getattr(checks, fn)(ctx_for(extras={}), {})
+        res = one(getattr(checks, fn)(ctx_for(extras={}), {}))
         assert res.status is Status.SKIP
         assert "no estate result" in res.observed
-        res = getattr(checks, fn)(
-            ctx_for(extras={"parity_estate": "not an estate"}), {}
+        res = one(
+            getattr(checks, fn)(ctx_for(extras={"parity_estate": "not an estate"}), {})
         )
         assert res.status is Status.SKIP
 
-    def test_estate_checks_skip_in_plain_parity_runs(self):
-        """A single-workbook parity run carries a ParityBundle, not an
-        EstateResult: the estate checks must stay out of its verdict."""
+    def test_estate_checks_emit_nothing_in_plain_parity_runs(self):
+        """Cycle-2 fix: a single-workbook parity run carries a ParityBundle,
+        not an EstateResult — the roll-up checks are meaningless there, not
+        skipped risk, so they emit NOTHING instead of stamping 'no estate
+        result' into every check/snapshot coverage caption."""
         from plumb.checks.parity import m_estate_001, m_estate_002
 
         bundle_ctx = ctx_for(make_bundle())
-        assert m_estate_001(bundle_ctx, {}).status is Status.SKIP
-        assert m_estate_002(bundle_ctx, {}).status is Status.SKIP
+        assert m_estate_001(bundle_ctx, {}) == []
+        assert m_estate_002(bundle_ctx, {}) == []
+
+    @pytest.mark.parametrize("fn", ALL_CHECK_FNS)
+    def test_workbook_checks_emit_nothing_in_estate_rollup_runs(self, fn):
+        """Cycle-2 fix: in the estate roll-up run the per-workbook M-*
+        checks already ran inside each sweep; emitting nine SKIPs would
+        read as phantom capability gaps in the roll-up report."""
+        from plumb.parity.contracts import ESTATE_EXTRAS_KEY, EstateResult
+
+        ctx = ctx_for(extras={ESTATE_EXTRAS_KEY: EstateResult(phase="check")})
+        assert fn(ctx, {}) == []
 
     def test_empty_estate_warns_never_passes(self):
         from plumb.checks.parity import m_estate_001, m_estate_002

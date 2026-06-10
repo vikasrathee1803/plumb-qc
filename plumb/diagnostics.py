@@ -48,11 +48,31 @@ def _dep(name: str) -> str:
     return getattr(mod, "__version__", "ok")
 
 
+def _ensure_web_importable() -> bool:
+    """web/ is a repo-root sibling of the plumb package, not part of the
+    wheel; the CLI `web` command inserts the repo root on sys.path before
+    importing it. The doctor must judge the same launch path the `web`
+    command actually uses — without this it false-FAILs a healthy install
+    where plumb is importable but the repo root is not on sys.path."""
+    if not (_ROOT / "web").is_dir():
+        return False
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    return True
+
+
+_WEB_ABSENT = "web/ not present (wheel install; the web UI needs a source checkout)"
+
+
 def _all_modules_import() -> str:
-    """Import every submodule of plumb and web.api, surfacing the first break."""
+    """Import every submodule of plumb (and web.api when present),
+    surfacing the first break."""
     failures: list[str] = []
     count = 0
-    for pkg_name in ("plumb", "web.api"):
+    packages = ["plumb"]
+    if _ensure_web_importable():
+        packages.append("web.api")
+    for pkg_name in packages:
         pkg = importlib.import_module(pkg_name)
         names = [pkg_name] + [
             m.name for m in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + ".")
@@ -114,6 +134,8 @@ def _engine_runs() -> str:
 
 
 def _web_app_builds() -> str:
+    if not _ensure_web_importable():
+        return _WEB_ABSENT
     from web.api.app import create_app
 
     create_app()
@@ -121,6 +143,8 @@ def _web_app_builds() -> str:
 
 
 def _web_ui_built() -> str:
+    if not (_ROOT / "web").is_dir():
+        return _WEB_ABSENT
     if not _DIST.exists():
         raise FileNotFoundError(
             f"{_DIST} missing - run `npm run build` in web/ui (source checkout only)"
