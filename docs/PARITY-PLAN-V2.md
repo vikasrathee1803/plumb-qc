@@ -127,6 +127,15 @@ All existing M-* check IDs and severities are unchanged.
 > when any workbook is REVIEW" through engine/verdict.py (the only place
 > verdict logic lives); the 001/002 pair makes compute_verdict reproduce
 > the D17 roll-up exactly. See ADR-0015.
+>
+> **Amendment (2026-06-10, QC wave):** the table's "Post-swap" row said
+> ParityBundle gains a `map_inverse` field. It does not: post-swap
+> resolution happens in mapping.resolve_post_swap (matching relations
+> against `new:` directly), because a plain forward resolve over the
+> inverted map would key snapshots on the NEW names and never find them.
+> `invert_map` exists as a public, tested helper for map tooling, but the
+> product path does not call it. ParityBundle gained `post_swap` and
+> `map_new_fqns` (the --post-swap hint index) instead.
 
 ---
 

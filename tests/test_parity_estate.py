@@ -519,3 +519,130 @@ class TestComputeRollup:
 
     def test_empty_estate_is_none(self) -> None:
         assert EstateResult(phase="check").compute_rollup() is None
+
+
+# --- QC wave v2 regressions ------------------------------------------------
+
+
+class TestQcWaveRegressions:
+    def test_oserror_workbook_is_isolated_not_estate_abort(self, tmp_path: Path) -> None:
+        """QC F1: an entry whose path raises OSError (here: a directory
+        matched by a glob) must land on that entry's error; the other
+        workbooks still run and the estate completes."""
+        good = write_twb(tmp_path, TWB_CUSTOM_SQL, "good.twb")
+        a_dir = tmp_path / "not_a_workbook.twb"
+        a_dir.mkdir()
+        manifest = EstateManifest(
+            version=1,
+            workbooks=[
+                WorkbookEntry(path=str(a_dir)),
+                WorkbookEntry(path=str(good)),
+            ],
+        )
+        estate, rollup_run = run_estate(
+            manifest,
+            "snapshot",
+            ruleset=parity_ruleset(),
+            store=LocalParquetStore(tmp_path / "store"),
+            legacy_session_factory=lambda: RouteSession(routes=list(COUNT_ROUTES)),
+        )
+        assert estate.entries[0].error is not None
+        assert estate.entries[1].error is None
+        assert estate.entries[1].snapshot_result is not None
+        assert estate.rollup is Verdict.BLOCKED
+        assert rollup_run is not None  # the roll-up run still happened
+
+    def test_run_phase_skips_check_for_blocked_snapshot(self, tmp_path: Path) -> None:
+        """QC F2 (ADR-0015 D16): in phase "run", a workbook whose snapshot
+        phase is BLOCKED gets no check sweep — no target-side queries are
+        spent re-proving it — while healthy workbooks are still checked.
+        The blocked entry keeps its snapshot verdict for the roll-up."""
+        from tests._parity_fixtures import TWB_TWO_TABLES
+
+        good = write_twb(tmp_path, TWB_CUSTOM_SQL, "good.twb")
+        blocked = write_twb(tmp_path, TWB_TWO_TABLES, "blocked.twb")
+        # identity off + no entries: every table unmapped -> M-MAP-001
+        # (BLOCKER) fails the snapshot phase statically.
+        strict_map = tmp_path / "strict.yml"
+        strict_map.write_text(
+            "version: 1\ndefaults: { identity_fallback: false }\n", encoding="utf-8"
+        )
+        manifest = EstateManifest(
+            version=1,
+            workbooks=[
+                WorkbookEntry(path=str(blocked), map=str(strict_map)),
+                WorkbookEntry(path=str(good)),
+            ],
+        )
+        events: list[str] = []
+        estate, _ = run_estate(
+            manifest,
+            "run",
+            ruleset=parity_ruleset(),
+            store=LocalParquetStore(tmp_path / "store"),
+            legacy_session_factory=tracked_factory("legacy", events, COUNT_ROUTES),
+            target_session_factory=tracked_factory("target", events, COUNT_ROUTES),
+        )
+        blocked_entry, good_entry = estate.entries
+        assert blocked_entry.snapshot_result is not None
+        assert blocked_entry.snapshot_result.verdict is Verdict.BLOCKED
+        assert blocked_entry.check_result is None  # D16: no check sweep
+        assert blocked_entry.error is None  # not an error: an honest skip
+        assert good_entry.check_result is not None
+        assert estate.rollup is Verdict.BLOCKED
+        # The target session ran only the good workbook's queries.
+        assert events.count("open:target") == 1
+
+    def test_check_sweep_session_not_opened_when_nothing_runnable(
+        self, tmp_path: Path
+    ) -> None:
+        """QC F8: when every entry errored in the snapshot sweep, the check
+        sweep of phase "run" must not open a target session at all."""
+        bad = write_twb(tmp_path, TWB_MALFORMED, "bad.twb")
+        events: list[str] = []
+        estate, _ = run_estate(
+            manifest_for([bad]),
+            "run",
+            ruleset=parity_ruleset(),
+            store=LocalParquetStore(tmp_path / "store"),
+            legacy_session_factory=tracked_factory("legacy", events, COUNT_ROUTES),
+            target_session_factory=tracked_factory("target", events, COUNT_ROUTES),
+        )
+        assert estate.entries[0].error is not None
+        assert "open:target" not in events
+        # The legacy factory was also never needed: the only entry failed at
+        # parse time... but parse happens inside run_parity, so the legacy
+        # session WAS opened. Only the target side is provably avoidable.
+        assert events.count("open:legacy") == 1
+
+    def test_snapshot_prefix_traversal_and_case_are_refused(self, tmp_path: Path) -> None:
+        """QC F3: an override becomes a store FILENAME — path separators and
+        traversal must be refused at validation, and two prefixes differing
+        only by case must collide (NTFS/APFS are case-insensitive)."""
+        wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
+        with pytest.raises(Exception, match="snapshot_prefix"):
+            WorkbookEntry(path=str(wb), snapshot_prefix="..\\outside\\pwn")
+        with pytest.raises(Exception, match="snapshot_prefix"):
+            WorkbookEntry(path=str(wb), snapshot_prefix="wave/one")
+        with pytest.raises(Exception, match="snapshot_prefix"):
+            WorkbookEntry(path=str(wb), snapshot_prefix="WB")  # uppercase
+        WorkbookEntry(path=str(wb), snapshot_prefix="wave2_kpi-a")  # fine
+
+    def test_case_only_prefix_collision_is_refused_at_load(self, tmp_path: Path) -> None:
+        """QC F3, the loader half: same-stem-after-casefold prefixes collide.
+        Overrides are lowercase-only, so the colliding pair here is two
+        derived prefixes from paths differing only by case in a parent dir
+        (the stems sanitize identically)."""
+        d1 = tmp_path / "a"
+        d2 = tmp_path / "b"
+        d1.mkdir()
+        d2.mkdir()
+        write_twb(d1, TWB_CUSTOM_SQL, "kpi.twb")
+        write_twb(d2, TWB_CUSTOM_SQL, "KPI.twb")
+        manifest_file = tmp_path / "wave.yml"
+        manifest_file.write_text(
+            "version: 1\nworkbooks:\n  - path: a/kpi.twb\n  - path: b/KPI.twb\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="snapshot prefix"):
+            load_manifest(manifest_file)

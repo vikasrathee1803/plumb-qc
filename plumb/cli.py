@@ -480,6 +480,16 @@ def parity_run(
     from plumb.checks._tableau import TableauParseError as _ParseError
     from plumb.parity.runner import build_bundle, run_parity
 
+    if static_only:
+        # A static snapshot phase persists nothing, so the check phase
+        # would always block on the missing snapshots it could never have
+        # written (QC F18). Refuse instead of manufacturing a fake BLOCKED.
+        raise _fail(
+            "--static-only cannot run both phases: a static snapshot writes "
+            "no baselines, so the check phase would always block; run "
+            "'plumb parity snapshot --static-only' or "
+            "'plumb parity check --static-only' separately"
+        )
     if map_file is not None and not map_file.exists():
         raise _fail(f"map file not found: {map_file}")
 
@@ -599,6 +609,15 @@ def parity_estate(
         raise _fail(f"unsupported phase {phase!r}; use snapshot, check, or run")
     if post_swap and phase != "check":
         raise _fail("--post-swap applies to the check phase only")
+    if static_only and phase == "run":
+        # Same self-defeating composition as `parity run --static-only`
+        # (QC F18): the static snapshot sweep writes nothing, so the check
+        # sweep blocks on every workbook by construction.
+        raise _fail(
+            "--static-only cannot run both phases: a static snapshot sweep "
+            "writes no baselines, so the check sweep would block every "
+            "workbook; use --phase snapshot or --phase check with --static-only"
+        )
     if map_file is not None and not map_file.exists():
         raise _fail(f"map file not found: {map_file}")
     gate = fail_on
@@ -654,6 +673,18 @@ def parity_estate(
     _print_estate(estate)
     _print_summary(rollup, out_dir)
     verdict = estate.rollup or rollup.verdict
+    if estate.rollup is not None and estate.rollup is not rollup.verdict:
+        # Possible when a custom ruleset disables or re-ranks M-ESTATE-001/
+        # 002: the written reports then carry a different verdict than the
+        # D17 roll-up that decides the exit code (QC F6). CI must trust the
+        # exit code; say so instead of letting the split pass silently.
+        err_console.print(
+            f"[yellow]warning:[/yellow] the report verdict ({rollup.verdict.value}) "
+            f"disagrees with the estate roll-up ({estate.rollup.value}) — the "
+            "M-ESTATE checks are disabled or re-ranked in this ruleset. The "
+            "exit code follows the roll-up (D17); re-enable M-ESTATE-001/002 "
+            "to make the reports agree."
+        )
     raise typer.Exit(exit_code_for_verdict(verdict, gate or ruleset.defaults.fail_on))
 
 

@@ -591,6 +591,11 @@ class TestResolvePostSwap:
         assert post_metrics == pre_metrics
 
     def test_two_part_relation_fqn_tail_matches_entry_new(self) -> None:
+        """QC F11: a 2-part relation FQN tail-matches, and the resolved
+        target_fqn must be the entry's fully-qualified `new:` name — the
+        relation's own 2-part spelling can never be measured (parse_fqn
+        requires DB.SCHEMA.TABLE), which made every tail match a
+        guaranteed measurement ERROR."""
         parity_map = full_map()
         relation = table_relation(
             database=None, schema="PRESENTATION", table="FCT_ORDERS"
@@ -599,10 +604,67 @@ class TestResolvePostSwap:
         resolution = resolve_post_swap([relation], parity_map)
         assert len(resolution.resolved) == 1
         resolved = resolution.resolved[0]
-        # target_fqn is the relation's own FQN as the workbook spells it.
-        assert resolved.target_fqn == "PRESENTATION.FCT_ORDERS"
+        # target_fqn is the authored `new:`, fully qualified and measurable.
+        assert resolved.target_fqn == "GALAXY_DB.PRESENTATION.FCT_ORDERS"
+        parse_fqn(resolved.target_fqn)  # must not raise
         # The legacy identity is still reconstructed fully qualified.
         assert resolved.relation.fqn == "LEGACY_DB.SALES.ORDERS"
+
+    def test_two_part_tail_match_is_measurable_end_to_end(self) -> None:
+        """QC F11 (the seam itself): the resolved object from a 2-part tail
+        match must survive measure(..., 'target') — the original defect only
+        appeared when mapping output met metrics input."""
+        parity_map = full_map()
+        relation = table_relation(
+            database=None, schema="PRESENTATION", table="FCT_ORDERS"
+        )
+        resolved = resolve_post_swap([relation], parity_map).resolved[0]
+        session = FakeParitySession(
+            [
+                ("AMOUNT", "NUMBER"),
+                ("ORDER_DATE", "DATE"),
+                ("ORDER_ID", "NUMBER"),
+                ("SALES_REGION", "TEXT"),
+            ]
+        )
+        metrics = measure(session, resolved, "target")
+        assert metrics.object_fqn == "GALAXY_DB.PRESENTATION.FCT_ORDERS"
+
+    def test_ambiguous_tail_match_refused_into_uninvertible(self) -> None:
+        """QC F10: two entries with different databases share a SCHEMA.TABLE
+        tail and pass the injectivity gate; a 2-part relation matches BOTH.
+        First-match-wins would fabricate a legacy identity — the relation
+        must land in uninvertible naming every candidate."""
+        parity_map = make_map(
+            objects=[
+                {"old": "LDB1.S.T", "new": "GDB1.PRES.FCT"},
+                {"old": "LDB2.S.T", "new": "GDB2.PRES.FCT"},
+            ]
+        )
+        relation = table_relation(database=None, schema="PRES", table="FCT")
+        resolution = resolve_post_swap([relation], parity_map)
+        assert resolution.resolved == []
+        assert resolution.unmapped == []
+        assert len(resolution.uninvertible) == 1
+        offender, reason = resolution.uninvertible[0]
+        assert offender is relation
+        assert "ambiguous" in reason
+        assert "GDB1.PRES.FCT" in reason and "GDB2.PRES.FCT" in reason
+
+    def test_three_part_relation_is_never_ambiguous_across_databases(self) -> None:
+        """The F10 refusal must not over-trigger: a fully qualified relation
+        FQN matches exactly one of the tail-sharing entries."""
+        parity_map = make_map(
+            objects=[
+                {"old": "LDB1.S.T", "new": "GDB1.PRES.FCT"},
+                {"old": "LDB2.S.T", "new": "GDB2.PRES.FCT"},
+            ]
+        )
+        relation = table_relation(database="GDB2", schema="PRES", table="FCT")
+        resolution = resolve_post_swap([relation], parity_map)
+        assert resolution.uninvertible == []
+        assert len(resolution.resolved) == 1
+        assert resolution.resolved[0].relation.fqn == "LDB2.S.T"
 
     def test_bare_table_never_tail_matches_entry_new(self) -> None:
         parity_map = full_map()

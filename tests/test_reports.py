@@ -133,3 +133,18 @@ def test_writers_persist_to_disk(tmp_path: Path):
     j = write_json(result, tmp_path / "report.json")
     x = write_junit(result, tmp_path / "report.junit.xml")
     assert h.exists() and j.exists() and x.exists()
+
+
+def test_junit_strips_control_characters(tmp_path: Path):
+    """QC F5: ElementTree escapes markup but not the control characters XML
+    1.0 forbids; raw exception text in observed/remediation must not render
+    a junit file CI parsers reject."""
+    result = _result()
+    result.checks[0].observed = "boom \x0b mid-error \x00 text"
+    result.checks[0].remediation = "fix \x1b[31mthis\x1b[0m"
+    xml = render_junit(result)
+    parsed = ET.fromstring(xml)  # must not raise "not well-formed"
+    failure = parsed.find(".//failure")
+    assert failure is not None
+    assert "\x0b" not in xml and "\x00" not in xml and "\x1b" not in xml
+    assert "boom" in failure.get("message")

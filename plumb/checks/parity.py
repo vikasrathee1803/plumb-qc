@@ -369,10 +369,22 @@ def m_snap_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             f"run: plumb parity snapshot --workbook {bundle.workbook_path} "
             "--profile <legacy-profile> --map <map.yml>"
         )
+        if bundle.post_swap:
+            # The workbook is the swapped artifact: re-snapshotting it would
+            # capture the TARGET side as the baseline (QC F12). The snapshot
+            # exists under the pre-swap identity; the map must reproduce it.
+            remediation = (
+                "This is a post-swap check: the snapshots were taken under the "
+                "PRE-swap names. Re-spell each entry's `old:` exactly as the "
+                "pre-swap workbook spelled the FQN (case and database "
+                "included); custom SQL edited during the swap cannot be "
+                "re-identified. Do NOT re-snapshot the swapped artifact — that "
+                "would capture the target side as the baseline."
+            )
         # A missing snapshot whose relation already carries a `new:` name is
         # the signature of checking a swapped workbook without --post-swap:
         # re-snapshotting would capture the WRONG (target) side.
-        if any(_looks_swapped(r.relation, bundle) for r in missing_resolved):
+        elif any(_looks_swapped(r.relation, bundle) for r in missing_resolved):
             remediation = (
                 "At least one relation with a missing snapshot carries a `new:` "
                 "name from the map — if this workbook has already been swapped, "
@@ -417,7 +429,11 @@ def m_schema_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
     checked = 0
     for resolved in resolution.resolved:
         if resolved.relation.kind == "custom_sql":
-            continue  # only row-count metrics exist: schema check is vacuous
+            # Custom SQL can carry column metrics now (E9), but its types
+            # come from a SYSTEM$TYPEOF probe while table snapshots use
+            # INFORMATION_SCHEMA — comparing strings from two different
+            # discovery mechanisms would false-positive type drift.
+            continue
         name = snapshot_name(bundle.snapshot_prefix, resolved.relation)
         snap = bundle.snapshots.get(name)
         if snap is None:
@@ -964,10 +980,12 @@ def m_estate_001(ctx: CheckContext, params: dict[str, Any]) -> CheckResult:
             ),
             expected="no workbook in the estate blocked or errored",
             evidence_rows=evidence[:_DETAIL_CAP],
-            remediation="Open each named workbook's own parity report for the failing "
-            "M-* checks; the estate verdict clears when every workbook does. The "
-            "team may decide to migrate anyway — Plumb names the risk, it does "
-            "not decide (D17).",
+            remediation="Re-run each named workbook individually (plumb parity "
+            "snapshot/check --workbook ...) for its full report — estate runs "
+            "keep only the roll-up; estate.junit.xml is the complete "
+            "per-workbook record. The estate verdict clears when every "
+            "workbook does. The team may decide to migrate anyway — Plumb "
+            "names the risk, it does not decide (D17).",
         )
     return build_result(
         ctx,

@@ -1,4 +1,4 @@
-﻿"""End-to-end CLI tests for `plumb parity` (PARITY-PLAN S5.1).
+"""End-to-end CLI tests for `plumb parity` (PARITY-PLAN S5.1).
 
 Through typer's CliRunner with the session and baseline store monkey-
 patched: the snapshot -> check loop on the custom-SQL fixture, exit codes
@@ -252,7 +252,9 @@ class TestRunCommand:
         _store, _session, tmp_path = patched
         wb = write_twb(tmp_path, TWB_TWO_TABLES, "sales.twb")
         # Identity fallback off + no entries: every table is unmapped, so
-        # M-MAP-001 (BLOCKER) fails statically in the snapshot phase.
+        # M-MAP-001 (BLOCKER) fails statically in the snapshot phase even
+        # though a session is available (nothing resolves, so the patched
+        # session is never queried for these tables).
         strict_map = tmp_path / "strict.yml"
         strict_map.write_text(
             "version: 1\ndefaults: { identity_fallback: false }\n", encoding="utf-8"
@@ -261,7 +263,7 @@ class TestRunCommand:
             cli.app,
             [
                 "parity", "run", "--workbook", str(wb), "--map", str(strict_map),
-                "--rules", RULES, "--static-only",
+                "--rules", RULES,
             ],
         )
         assert result.exit_code == 2
@@ -537,3 +539,61 @@ class TestEstateCommand:
             ],
         )
         assert result.exit_code == 0, result.output
+
+
+class TestQcWaveCliRegressions:
+    def test_run_static_only_is_refused_not_fake_blocked(self, patched):
+        """QC F18: a static snapshot phase writes nothing, so the check
+        phase of `parity run --static-only` would always block on missing
+        snapshots — refuse loudly (exit 3) instead of exiting 2."""
+        _store, _session, tmp_path = patched
+        wb = write_twb(tmp_path, TWB_CUSTOM_SQL, "kpi.twb")
+        result = runner.invoke(
+            cli.app,
+            ["parity", "run", "--workbook", str(wb), "--rules", RULES, "--static-only"],
+        )
+        assert result.exit_code == 3
+        assert "static-only" in result.output
+        assert "separately" in result.output
+
+    def test_estate_run_phase_static_only_is_refused(self, patched):
+        _store, _session, tmp_path = patched
+        wave = tmp_path / "wave1"
+        wave.mkdir()
+        write_twb(wave, TWB_CUSTOM_SQL, "kpi.twb")
+        result = runner.invoke(
+            cli.app,
+            [
+                "parity", "estate", "--manifest", str(wave / "*.twb"),
+                "--phase", "run", "--rules", RULES, "--static-only",
+            ],
+        )
+        assert result.exit_code == 3
+        assert "static-only" in result.output
+
+    def test_estate_warns_when_rollup_and_report_verdicts_split(self, patched):
+        """QC F6: with M-ESTATE-001/002 disabled in a custom ruleset the
+        written reports carry compute_verdict's answer while the exit code
+        follows the D17 roll-up; the split must be loudly named."""
+        _store, _session, tmp_path = patched
+        wave = tmp_path / "wave1"
+        wave.mkdir()
+        write_twb(wave, TWB_MALFORMED, "broken.twb")  # estate rollup: BLOCKED
+        rules_text = Path(RULES).read_text(encoding="utf-8")
+        stripped = rules_text.replace(
+            "  - id: M-ESTATE-001\n    enabled: true\n", ""
+        ).replace("  - id: M-ESTATE-002\n    enabled: true\n", "")
+        assert "M-ESTATE" not in stripped
+        no_estate_rules = tmp_path / "no-estate.yml"
+        no_estate_rules.write_text(stripped, encoding="utf-8")
+        result = runner.invoke(
+            cli.app,
+            [
+                "parity", "estate", "--manifest", str(wave / "*.twb"),
+                "--phase", "snapshot", "--rules", str(no_estate_rules),
+            ],
+        )
+        # Exit code trusts the D17 roll-up (BLOCKED), not the neutered report.
+        assert result.exit_code == 2
+        assert "disagrees" in result.output
+        assert "M-ESTATE" in result.output

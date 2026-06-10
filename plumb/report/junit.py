@@ -3,7 +3,9 @@
 One testcase per check. FAIL maps to failure, ERROR to error, SKIP to
 skipped. WARN is a passing testcase with a note, because a WARN never
 fails the verdict; the CI gate is the process exit code, not this file.
-ElementTree handles XML escaping so check text is safe.
+ElementTree handles XML escaping of markup; control characters (which
+XML 1.0 forbids and ElementTree passes through) are stripped by xml_safe
+so hostile error text cannot render the file unparseable (QC F5).
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from plumb.engine.models import RunResult, Status
+from plumb.report._xml import xml_safe
 
 
 def render_junit(result: RunResult) -> str:
@@ -20,7 +23,7 @@ def render_junit(result: RunResult) -> str:
     suite = ET.Element(
         "testsuite",
         {
-            "name": f"plumb:{result.target.name}",
+            "name": xml_safe(f"plumb:{result.target.name}"),
             "tests": str(summary.total),
             "failures": str(failures),
             "errors": str(summary.errored),
@@ -34,26 +37,26 @@ def render_junit(result: RunResult) -> str:
         ("profile", result.profile or ""),
         ("run_id", result.run_id),
     ):
-        ET.SubElement(properties, "property", {"name": key, "value": value})
+        ET.SubElement(properties, "property", {"name": key, "value": xml_safe(value)})
 
     for check in result.checks:
         case = ET.SubElement(
             suite,
             "testcase",
             {
-                "classname": f"{result.target.name}.{check.family.value}",
-                "name": f"{check.id} {check.name}",
+                "classname": xml_safe(f"{result.target.name}.{check.family.value}"),
+                "name": xml_safe(f"{check.id} {check.name}"),
             },
         )
-        message = _message(check)
+        message = xml_safe(_message(check))
         if check.status is Status.FAIL:
             node = ET.SubElement(
                 case, "failure", {"type": check.severity.value, "message": message}
             )
-            node.text = check.remediation or ""
+            node.text = xml_safe(check.remediation or "")
         elif check.status is Status.ERROR:
             node = ET.SubElement(case, "error", {"message": message})
-            node.text = check.remediation or ""
+            node.text = xml_safe(check.remediation or "")
         elif check.status is Status.SKIP:
             ET.SubElement(case, "skipped", {"message": message})
         elif check.status is Status.WARN:

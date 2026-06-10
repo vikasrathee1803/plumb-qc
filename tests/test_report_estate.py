@@ -182,3 +182,42 @@ class TestEstateJunit:
         out = tmp_path / "ci" / "junit" / "estate.xml"
         write_estate_junit(sample_estate(), out)
         assert out.is_file()
+
+
+class TestQcWaveRegressions:
+    @staticmethod
+    def _estate(entries: list[WorkbookParity]) -> EstateResult:
+        estate = EstateResult(phase="run", entries=entries)
+        estate.rollup = estate.compute_rollup()
+        return estate
+
+    def test_errored_entry_never_shows_a_phase_verdict_as_worst(self) -> None:
+        """QC F4: snapshot READY + check-sweep error must not render a green
+        READY pill in the Worst column next to red error text."""
+        from plumb.report.estate import render_estate_html
+
+        entry = WorkbookParity(
+            workbook_path="wb.twbx",
+            snapshot_result=fake_run(Verdict.READY),
+            error="target session lost",
+        )
+        html = render_estate_html(self._estate([entry]))
+        # The Worst pill is ERROR; READY appears only in the Snapshot column.
+        assert 'p-ERROR">ERROR</span>' in html
+        assert 'p-READY">READY</span>' in html  # snapshot column, truthful
+        assert html.count('p-READY">READY</span>') == 1
+
+    def test_junit_with_control_characters_still_parses(self) -> None:
+        """QC F5: estate error strings are raw exception text from hostile
+        inputs; a \\x0b in one must not corrupt estate.junit.xml."""
+        from plumb.report.estate import render_estate_junit
+
+        entry = WorkbookParity(
+            workbook_path="wb\x0b.twbx", error="parse failed: \x00\x0b\x1b junk"
+        )
+        xml = render_estate_junit(self._estate([entry]))
+        parsed = ET.fromstring(xml)  # must not raise "not well-formed"
+        error = parsed.find(".//error")
+        assert error is not None
+        assert "parse failed" in (error.get("message") or "")
+        assert "\x0b" not in xml and "\x00" not in xml

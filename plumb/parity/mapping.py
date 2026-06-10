@@ -344,17 +344,18 @@ def invert_map(parity_map: ParityMap) -> ParityMap:
     )
 
 
-def _match_entry_by_new(fqn: str, entries: list[ObjectMapping]) -> ObjectMapping | None:
-    """First entry (file order) whose `new` names the relation FQN, or None.
+def _entries_matching_new(fqn: str, entries: list[ObjectMapping]) -> list[ObjectMapping]:
+    """Every entry whose `new` names the relation FQN.
 
     Same explicit semantics as _matches: entry.new is always 3-part; the
     relation FQN may be 2-part when the swapped workbook omits the database
     (tail-match on >=2 shared trailing parts, case-insensitive, never
-    1-part)."""
-    for entry in entries:
-        if _matches(entry.new, fqn):
-            return entry
-    return None
+    1-part). ALL matches are returned, not the first: two entries with
+    different databases but the same SCHEMA.TABLE tail pass the injectivity
+    gate yet both match a 2-part relation — picking one in file order would
+    fabricate a legacy identity (QC F10), so the caller refuses ambiguity
+    into `uninvertible` instead."""
+    return [entry for entry in entries if _matches(entry.new, fqn)]
 
 
 def resolve_post_swap(
@@ -364,20 +365,23 @@ def resolve_post_swap(
 
     Table relations here carry NEW (galaxy) FQNs; the snapshots were taken
     under LEGACY names. Each relation is matched against entry.new (see
-    _match_entry_by_new) and, when the entry's old is fully qualified, a
+    _entries_matching_new) and, when the entry's old is fully qualified, a
     synthetic legacy SourceRelation is built from it so snapshot_name()
-    reproduces the pre-swap snapshot identity exactly; target_fqn stays the
-    relation's own NEW FQN as the swapped workbook spells it, so
-    measure(..., "target") measures the new object exactly as the v1 check
-    phase would. This is deliberately NOT resolve(relations,
-    invert_map(map)): a plain forward resolve keys the snapshot on the
-    relation itself (the NEW name) and could never reach the legacy
-    snapshots.
+    reproduces the pre-swap snapshot identity exactly; target_fqn is the
+    entry's own `new:` name — always fully qualified, and exactly what the
+    v1 pre-swap resolution would have produced — because a 2-part relation
+    FQN cannot be measured (metrics requires DB.SCHEMA.TABLE; QC F11).
+    This is deliberately NOT resolve(relations, invert_map(map)): a plain
+    forward resolve keys the snapshot on the relation itself (the NEW name)
+    and could never reach the legacy snapshots.
 
     A matched entry whose old is 2-part lands in resolution.uninvertible
     with a machine-readable reason, not in plain unmapped: without the
     database part the legacy snapshot FQN cannot be reconstructed, and
-    M-MAP-001 must say so distinctly. Unmatched relations follow the v1
+    M-MAP-001 must say so distinctly. A relation matching MORE THAN ONE
+    entry (same SCHEMA.TABLE tail across databases, 2-part relation FQN)
+    also lands in uninvertible naming every candidate — Plumb refuses to
+    guess between them. Unmatched relations follow the v1
     order: ignore glob (patterns are matched against the relation's own FQN
     — the names in the artifact being checked, here the NEW names), then
     identity fallback (3-part only, same name both sides), else unmapped.
@@ -420,8 +424,20 @@ def resolve_post_swap(
         if fqn is None:
             resolution.unmapped.append(relation)
             continue
-        entry = _match_entry_by_new(fqn, parity_map.objects)
-        if entry is not None:
+        matches = _entries_matching_new(fqn, parity_map.objects)
+        if len(matches) > 1:
+            candidates = ", ".join(f"{e.old} -> {e.new}" for e in matches)
+            resolution.uninvertible.append(
+                (
+                    relation,
+                    f"ambiguous: {fqn} matches {len(matches)} map entries "
+                    f"({candidates}); qualify the relation with its database "
+                    "or split the map so one entry matches",
+                )
+            )
+            continue
+        if matches:
+            entry = matches[0]
             if len(_name_parts(entry.old)) != 3:
                 resolution.uninvertible.append(
                     (
@@ -449,7 +465,11 @@ def resolve_post_swap(
             resolution.resolved.append(
                 ResolvedObject(
                     relation=synthetic,
-                    target_fqn=fqn,
+                    # entry.new, not the relation's own spelling: a 2-part
+                    # relation FQN is unmeasurable (parse_fqn requires three
+                    # parts), and entry.new is what pre-swap resolution
+                    # produced, keeping both modes byte-identical downstream.
+                    target_fqn=entry.new,
                     via_identity=False,
                     column_map=dict(entry.columns),
                     keys=tuple(entry.keys),

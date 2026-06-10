@@ -1083,3 +1083,20 @@ class TestRegisteredCallables:
         }
         for check_id, fn in expected.items():
             assert registry.get_check(check_id).fn is fn, check_id
+
+
+class TestMSnap001PostSwapRemediation:
+    def test_post_swap_missing_snapshot_never_advises_resnapshot(self):
+        """QC F12: in post-swap mode the missing-snapshot remediation must
+        tell the analyst to fix the map's old: spelling — re-snapshotting
+        the swapped artifact would baseline the TARGET side."""
+        resolution = MappingResolution(
+            resolved=[ResolvedObject(relation=REL_ORDERS, target_fqn=ORDERS_TARGET)]
+        )
+        bundle = make_bundle(resolution=resolution)
+        bundle.post_swap = True
+        res = m_snap_001(ctx_for(bundle), {})
+        assert res.status is Status.FAIL
+        assert "plumb parity snapshot" not in res.remediation
+        assert "old:" in res.remediation
+        assert "Do NOT re-snapshot" in res.remediation

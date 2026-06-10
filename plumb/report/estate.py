@@ -6,8 +6,10 @@ writers render what the runner decided, they decide nothing. The unit
 here is the WORKBOOK, not the check: CI renders one test case per
 workbook so every blocked or errored workbook is a named red row in the
 wave's gate, and the HTML table answers "which workbook is holding the
-wave" at a glance. Autoescaping is on (HTML) and ElementTree escapes the
-XML, so workbook paths and error text cannot break either report.
+wave" at a glance. Autoescaping is on (HTML); for the XML, ElementTree
+escapes markup but NOT the control characters XML 1.0 forbids, so every
+attribute and text node built from workbook paths or error text goes
+through xml_safe (QC F5).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from jinja2 import Environment
 from plumb import __version__
 from plumb.engine.models import Verdict
 from plumb.parity.contracts import EstateResult, WorkbookParity
+from plumb.report._xml import xml_safe
 
 _env = Environment(autoescape=True)
 
@@ -56,6 +59,7 @@ _TEMPLATE = """\
   .p-REVIEW { background:rgba(245,165,36,0.12); color:#f5a524; }
   .p-READY_WITH_NOTES { background:rgba(90,169,255,0.12); color:#5aa9ff; }
   .p-READY { background:rgba(61,220,151,0.12); color:#3ddc97; }
+  .p-ERROR { background:rgba(211,107,255,0.12); color:#d36bff; }
   .p-NONE { background:#1a1d28; color:#757a8c; }
   .err { color:#ff6b7d; font-size:12px; font-family:ui-monospace,monospace; }
   footer { color:#757a8c; font-size:12px; text-align:center; padding-top:8px; }
@@ -118,12 +122,19 @@ _template = _env.from_string(_TEMPLATE)
 
 
 def _row(entry: WorkbookParity) -> dict[str, str]:
+    # An errored entry counts as BLOCKED in compute_rollup; its Worst pill
+    # must never show a phase verdict that happened to succeed (a green
+    # READY next to red error text — QC F4). ERROR wins the cell.
+    if entry.error is not None:
+        worst = "ERROR"
+    else:
+        worst = entry.verdict.value if entry.verdict else ""
     return {
         "path": entry.workbook_path,
         "map": entry.map_path or "",
         "snapshot": entry.snapshot_result.verdict.value if entry.snapshot_result else "",
         "check": entry.check_result.verdict.value if entry.check_result else "",
-        "worst": entry.verdict.value if entry.verdict else "",
+        "worst": worst,
         "error": entry.error or "",
     }
 
@@ -202,17 +213,17 @@ def render_estate_junit(estate: EstateResult) -> str:
         ("manifest", estate.manifest_ref or ""),
         ("created_at", estate.created_at),
     ):
-        ET.SubElement(properties, "property", {"name": key, "value": value})
+        ET.SubElement(properties, "property", {"name": key, "value": xml_safe(value)})
 
     for entry in estate.entries:
         case = ET.SubElement(
             suite,
             "testcase",
-            {"classname": "plumb-parity-estate", "name": entry.workbook_path},
+            {"classname": "plumb-parity-estate", "name": xml_safe(entry.workbook_path)},
         )
         verdict = entry.verdict
         if entry.error is not None:
-            ET.SubElement(case, "error", {"message": entry.error})
+            ET.SubElement(case, "error", {"message": xml_safe(entry.error)})
         elif verdict is None:
             # No error recorded but no phase produced a result either; the
             # roll-up counts this as BLOCKED, so the CI row is red too.

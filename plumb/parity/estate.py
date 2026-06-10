@@ -21,17 +21,25 @@ and the estate report writers consume. Two stances are load-bearing:
 from __future__ import annotations
 
 import glob as glob_module
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+)
 
 from plumb.baseline.store import BaselineStore
 from plumb.checks._tableau import TableauParseError
 from plumb.config.loader import ConfigError, load_yaml_mapping
 from plumb.config.models import Ruleset
-from plumb.engine.models import RunResult, Target, utc_now
+from plumb.engine.models import RunResult, Target, Verdict, utc_now
 from plumb.engine.runner import RunRequest, run_checks
 from plumb.parity.contracts import (
     ESTATE_EXTRAS_KEY,
@@ -60,6 +68,23 @@ class WorkbookEntry(BaseModel):
     path: str = Field(min_length=1)
     map: str | None = None
     snapshot_prefix: str | None = None
+
+    @field_validator("snapshot_prefix")
+    @classmethod
+    def _prefix_is_safe(cls, value: str | None) -> str | None:
+        """The prefix becomes part of a baseline-store FILENAME. Derived
+        prefixes go through contracts._sanitize; an override must meet the
+        same bar or it can escape the store root (`..\\outside\\x`) or
+        collide case-insensitively on NTFS with a prefix that differs only
+        by case (QC F3). Lowercase [a-z0-9_-] only, like _sanitize emits."""
+        if value is None:
+            return value
+        if not re.fullmatch(r"[a-z0-9_-]+", value):
+            raise ValueError(
+                f"snapshot_prefix {value!r} must contain only lowercase "
+                "letters, digits, '_' and '-' (it becomes a snapshot filename)"
+            )
+        return value
 
 
 class EstateManifest(BaseModel):
@@ -160,7 +185,10 @@ def _ensure_unique_prefixes(manifest: EstateManifest, source: str) -> None:
     by_prefix: dict[str, list[str]] = {}
     for entry in manifest.workbooks:
         prefix = entry.snapshot_prefix or snapshot_prefix_for(entry.path)
-        by_prefix.setdefault(prefix, []).append(entry.path)
+        # casefold: the store writes <prefix>__....parquet on filesystems
+        # that are commonly case-insensitive (NTFS, APFS); WB and wb would
+        # silently share a file there (QC F3).
+        by_prefix.setdefault(prefix.casefold(), []).append(entry.path)
     collisions = {p: paths for p, paths in by_prefix.items() if len(paths) > 1}
     if not collisions:
         return
@@ -276,13 +304,18 @@ def _sweep(
     """One sequential pass over every entry with at most one session for
     the whole sweep (D12). Per-workbook failures land on the entry and
     never abort the sweep; the session is closed even when they do."""
+    runnable = [
+        (spec, entry)
+        for spec, entry in zip(manifest.workbooks, estate.entries, strict=True)
+        if entry.error is None and not _blocked_in_snapshot(estate, mode, entry)
+    ]
+    if not runnable:
+        # Nothing left to run (everything errored or was blocked earlier):
+        # opening a session would spend a connection on zero queries.
+        return
     session = session_factory() if session_factory is not None else None
     try:
-        for spec, entry in zip(manifest.workbooks, estate.entries, strict=True):
-            if entry.error is not None:
-                # Errored in an earlier sweep; the error already stands -
-                # spend no queries on it.
-                continue
+        for spec, entry in runnable:
             try:
                 result = run_parity(
                     workbook=Path(entry.workbook_path),
@@ -297,7 +330,12 @@ def _sweep(
                     post_swap=post_swap,
                     snapshot_prefix=spec.snapshot_prefix,
                 )
-            except (TableauParseError, ConfigError, ValueError) as exc:
+            except (TableauParseError, ConfigError, ValueError, OSError) as exc:
+                # OSError covers unreadable files and glob matches that are
+                # not workbooks at all (directories, permission walls) —
+                # anything escaping here would abort the estate and exit the
+                # process with code 1, which the CI contract reads as
+                # REVIEW (QC F1).
                 entry.error = str(exc)
                 continue
             if mode == "snapshot":
@@ -307,3 +345,17 @@ def _sweep(
     finally:
         if session is not None:
             session.close()
+
+
+def _blocked_in_snapshot(estate: EstateResult, mode: ParityMode, entry: WorkbookParity) -> bool:
+    """In a both-live (phase "run") estate, a workbook whose snapshot phase
+    is BLOCKED is skipped in the check sweep (ADR-0015 D16): its snapshot
+    set is incomplete, so the check would spend target-side queries
+    re-proving an already-blocked workbook. The entry keeps the BLOCKED
+    snapshot result, so the roll-up and reports stay truthful."""
+    return (
+        estate.phase == "run"
+        and mode == "check"
+        and entry.snapshot_result is not None
+        and entry.snapshot_result.verdict is Verdict.BLOCKED
+    )
